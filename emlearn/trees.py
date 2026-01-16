@@ -1139,6 +1139,130 @@ def generate_c_gradient_boosting_inlined(forest, name, n_features, learning_rate
     return out
 
 
+def generate_c_gradient_boosting_loadable(forest, name, n_features, learning_rate,
+        initial_value, n_classes, dtype='int16_t', classifier=True):
+    """Generate loadable C code for gradient boosting model.
+
+    Creates struct-based representation using EmlGradientBoosting from eml_trees.h.
+
+    Args:
+        forest: Flattened forest tuple (nodes, roots, leaves).
+        name: Name for C model variable.
+        n_features: Number of input features.
+        learning_rate: Learning rate from estimator.
+        initial_value: Initial prediction value(s).
+        n_classes: Number of classes (0 for regression).
+        dtype: Feature data type.
+        classifier: True for classifier, False for regressor.
+
+    Returns:
+        str: Generated C code.
+    """
+    nodes, roots, leaves = forest
+
+    cgen.assert_valid_identifier(name)
+
+    # Generate nodes array
+    nodes_name = name + '_nodes'
+    nodes_c = generate_c_nodes(nodes, nodes_name, dtype=dtype, modifiers='static const')
+
+    # Generate tree roots array
+    tree_roots_name = name + '_tree_roots'
+    tree_roots_values = ', '.join(str(t) for t in roots)
+    tree_roots_c = 'static const int32_t {name}[{length}] = {{ {values} }};'.format(
+        name=tree_roots_name, length=len(roots), values=tree_roots_values
+    )
+
+    # Generate leaves array (32-bit floats for gradient boosting)
+    leaves_name = name + '_leaves'
+    leaves_array = leaves_to_bytelist(leaves, leaf_bits=32)
+    leaves_c = cgen.array_declare(
+        leaves_name, len(leaves_array),
+        modifiers='static const', dtype='uint8_t', values=leaves_array
+    )
+
+    # Generate initial values array for multi-class
+    initial_values_c = ''
+    initial_values_ptr = 'NULL'
+    if classifier and n_classes > 2 and isinstance(initial_value, (list, tuple)):
+        initial_values_name = name + '_initial_values'
+        initial_values_str = ', '.join(cgen.constant(v, dtype='float') for v in initial_value)
+        initial_values_c = 'static const float {name}[{length}] = {{ {values} }};'.format(
+            name=initial_values_name, length=len(initial_value), values=initial_values_str
+        )
+        initial_values_ptr = '(float *)' + initial_values_name
+
+    # Generate EmlGradientBoosting struct
+    initial_val = initial_value if not isinstance(initial_value, (list, tuple)) else 0.0
+    model_struct = """EmlGradientBoosting {name} = {{
+    // EmlTrees trees
+    {{
+        {n_nodes},
+        (EmlTreesNode *)({nodes_name}),
+        {n_trees},
+        (int32_t *)({tree_roots_name}),
+        {n_leaves},
+        (uint8_t *)({leaves_name}),
+        32,  // leaf_bits
+        {n_features},
+        {n_classes},
+    }},
+    {learning_rate},  // learning_rate
+    {initial_value},  // initial_value
+    {initial_values_ptr},  // initial_values
+    {n_classes},  // n_classes
+    {is_classifier},  // is_classifier
+}};""".format(
+        name=name,
+        n_nodes=len(nodes),
+        nodes_name=nodes_name,
+        n_trees=len(roots),
+        tree_roots_name=tree_roots_name,
+        n_leaves=len(leaves_array),
+        leaves_name=leaves_name,
+        n_features=n_features,
+        n_classes=n_classes,
+        learning_rate=cgen.constant(learning_rate, dtype='float'),
+        initial_value=cgen.constant(initial_val, dtype='float'),
+        initial_values_ptr=initial_values_ptr,
+        is_classifier=1 if classifier else 0,
+    )
+
+    # Generate wrapper functions
+    ctype = dtype
+
+    if classifier:
+        predict_func = """int32_t {name}_predict(const {ctype} *features, int32_t features_length) {{
+    return eml_gradient_boosting_predict(&{model}, features, features_length);
+}}""".format(name=name, ctype=ctype, model=name)
+
+        proba_func = """int {name}_predict_proba(const {ctype} *features, int32_t features_length, float *out, int out_length) {{
+    return eml_gradient_boosting_predict_proba(&{model}, features, features_length, out, out_length);
+}}""".format(name=name, ctype=ctype, model=name)
+
+        funcs = [predict_func, proba_func]
+    else:
+        regress_func = """float {name}_predict(const {ctype} *features, int32_t features_length) {{
+    return eml_gradient_boosting_regress(&{model}, features, features_length);
+}}""".format(name=name, ctype=ctype, model=name)
+
+        funcs = [regress_func]
+
+    head = """
+// !!! This file is generated using emlearn !!!
+
+#include <eml_trees.h>
+"""
+
+    parts = [head, nodes_c, tree_roots_c, leaves_c]
+    if initial_values_c:
+        parts.append(initial_values_c)
+    parts.append(model_struct)
+    parts.extend(funcs)
+
+    return '\n\n'.join(parts)
+
+
 class GradientBoostingWrapper:
     """Wrapper for GradientBoosting models from scikit-learn.
 
@@ -1151,15 +1275,14 @@ class GradientBoostingWrapper:
     Args:
         estimator: A fitted sklearn GradientBoostingClassifier or
             GradientBoostingRegressor instance.
-        method: Inference method. Currently only 'inline' is supported.
-            'loadable' will be added in a future release.
+        method: Inference method. Either 'inline' (generates if-else code)
+            or 'loadable' (generates struct-based code using eml_trees.h).
         dtype: Data type for features in generated C code.
             Defaults to 'float'.
 
     Raises:
         ImportError: If sklearn version is below 1.0.0.
         ValueError: If method is not 'inline' or 'loadable'.
-        ValueError: If method='loadable' (not yet supported).
         ValueError: If custom init estimator is used without required attributes.
         ValueError: If class priors are too extreme (< 1e-10) for binary classification.
 
@@ -1264,8 +1387,8 @@ class GradientBoostingWrapper:
         if self.method not in ('loadable', 'inline'):
             raise ValueError("Unsupported inference method '{}'".format(self.method))
 
-        if self.method == 'loadable':
-            raise ValueError("Inference method='loadable' not yet supported for GradientBoosting. Use method='inline'")
+        if self.method == 'loadable' and self.dtype != 'int16_t':
+            raise ValueError("Inference method='loadable' only supports dtype='int16_t'. Use method='inline' for others")
 
         self.classifier_ = None
 
@@ -1400,16 +1523,28 @@ class GradientBoostingWrapper:
         if format != 'c':
             raise ValueError(f"Only format='c' is supported for GradientBoosting, got '{format}'")
 
-        code = generate_c_gradient_boosting_inlined(
-            forest=self.forest_,
-            name=name,
-            n_features=self.n_features,
-            learning_rate=self.learning_rate,
-            initial_value=self.initial_value,
-            n_classes=self.n_classes,
-            dtype=self.dtype,
-            classifier=self.is_classifier,
-        )
+        if self.method == 'inline':
+            code = generate_c_gradient_boosting_inlined(
+                forest=self.forest_,
+                name=name,
+                n_features=self.n_features,
+                learning_rate=self.learning_rate,
+                initial_value=self.initial_value,
+                n_classes=self.n_classes,
+                dtype=self.dtype,
+                classifier=self.is_classifier,
+            )
+        else:  # loadable
+            code = generate_c_gradient_boosting_loadable(
+                forest=self.forest_,
+                name=name,
+                n_features=self.n_features,
+                learning_rate=self.learning_rate,
+                initial_value=self.initial_value,
+                n_classes=self.n_classes,
+                dtype=self.dtype,
+                classifier=self.is_classifier,
+            )
 
         if file:
             with open(file, 'w') as f:

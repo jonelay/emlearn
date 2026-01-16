@@ -479,14 +479,24 @@ def test_gradient_boosting_regressor_predict(data, model):
     numpy.testing.assert_allclose(pred_c, pred_original, rtol=1e-3, atol=1e-3)
 
 
-def test_gradient_boosting_loadable_not_supported():
-    """Test that loadable method raises error for GradientBoosting."""
+def test_gradient_boosting_methods():
+    """Test that both inline and loadable methods are accepted for GradientBoosting."""
     X, y = datasets.make_classification(n_samples=50, n_features=4, random_state=42)
-    estimator = GradientBoostingClassifier(n_estimators=3, random_state=42)
-    estimator.fit(X, y)
 
-    with pytest.raises(ValueError, match='loadable'):
-        emlearn.convert(estimator, method='loadable')
+    # Inline works with float features
+    estimator_inline = GradientBoostingClassifier(n_estimators=3, random_state=42)
+    estimator_inline.fit(X, y)
+    cmodel_inline = emlearn.convert(estimator_inline, method='inline')
+
+    # Loadable requires int16_t dtype (scaled features)
+    X_scaled = (X * 1000).astype(numpy.int16)
+    estimator_loadable = GradientBoostingClassifier(n_estimators=3, random_state=42)
+    estimator_loadable.fit(X_scaled, y)
+    cmodel_loadable = emlearn.convert(estimator_loadable, method='loadable', dtype='int16_t')
+
+    # Invalid method should raise
+    with pytest.raises(ValueError, match='Unsupported'):
+        emlearn.convert(estimator_inline, method='invalid_method')
 
 
 def test_gradient_boosting_single_estimator():
@@ -581,4 +591,107 @@ def test_gradient_boosting_save_to_file(tmp_path):
     assert 'gradient_boosting_model_predict' in content
     assert code == content
 
+
+# ============================================================================
+# Gradient Boosting Loadable Method Tests
+# ============================================================================
+
+@pytest.mark.parametrize("data", CLASSIFICATION_DATASETS.keys())
+def test_gradient_boosting_loadable_classifier(data):
+    """Test GradientBoostingClassifier with loadable method.
+
+    Loadable method requires dtype='int16_t', so features must be scaled
+    to int16 range (-32768 to 32767).
+    """
+    X, y = CLASSIFICATION_DATASETS[data]
+
+    # Scale features to int16 range for loadable method
+    X_scaled = (X * 1000).astype(numpy.int16)
+
+    clf = GradientBoostingClassifier(n_estimators=5, max_depth=3, random_state=42)
+    clf.fit(X_scaled, y)
+    cmodel = emlearn.convert(clf, method='loadable', dtype='int16_t')
+
+    pred_original = clf.predict(X_scaled[:10])
+    pred_c = cmodel.predict(X_scaled[:10])
+    numpy.testing.assert_equal(pred_c, pred_original)
+
+    proba_original = clf.predict_proba(X_scaled[:10])
+    proba_c = cmodel.predict_proba(X_scaled[:10])
+    numpy.testing.assert_allclose(proba_c, proba_original, rtol=0.02, atol=0.02)
+
+
+@pytest.mark.parametrize("data", MULTICLASS_DATASETS.keys())
+def test_gradient_boosting_loadable_multiclass(data):
+    """Test GradientBoostingClassifier loadable with multi-class datasets."""
+    X, y = MULTICLASS_DATASETS[data]
+
+    # Scale features to int16 range for loadable method
+    X_scaled = (X * 1000).astype(numpy.int16)
+
+    clf = GradientBoostingClassifier(n_estimators=5, max_depth=3, random_state=42)
+    clf.fit(X_scaled, y)
+    cmodel = emlearn.convert(clf, method='loadable', dtype='int16_t')
+
+    # Test predictions
+    pred_original = clf.predict(X_scaled[:10])
+    pred_c = cmodel.predict(X_scaled[:10])
+    numpy.testing.assert_equal(pred_c, pred_original)
+
+    # Test probabilities
+    proba_original = clf.predict_proba(X_scaled[:10])
+    proba_c = cmodel.predict_proba(X_scaled[:10])
+    numpy.testing.assert_allclose(proba_c, proba_original, rtol=0.02, atol=0.02)
+
+
+@pytest.mark.parametrize("data", REGRESSION_DATASETS.keys())
+def test_gradient_boosting_loadable_regressor(data):
+    """Test GradientBoostingRegressor with loadable method."""
+    X, y = REGRESSION_DATASETS[data]
+
+    # Scale features to int16 range for loadable method
+    X_scaled = (X * 100).astype(numpy.int16)
+
+    reg = GradientBoostingRegressor(n_estimators=5, max_depth=3, random_state=42)
+    reg.fit(X_scaled, y)
+    cmodel = emlearn.convert(reg, method='loadable', dtype='int16_t')
+
+    pred_original = reg.predict(X_scaled[:10])
+    pred_c = cmodel.predict(X_scaled[:10])
+    numpy.testing.assert_allclose(pred_c, pred_original, rtol=1e-3, atol=1e-3)
+
+
+def test_gradient_boosting_loadable_save_file(tmp_path):
+    """Test saving GradientBoosting loadable model to file."""
+    X, y = datasets.make_classification(n_samples=50, n_features=4, random_state=42)
+
+    # Scale to int16 range for loadable method
+    X_scaled = (X * 1000).astype(numpy.int16)
+
+    clf = GradientBoostingClassifier(n_estimators=3, random_state=42)
+    clf.fit(X_scaled, y)
+    cmodel = emlearn.convert(clf, method='loadable', dtype='int16_t')
+
+    # Save to file
+    file_path = tmp_path / "gb_loadable_model.h"
+    code = cmodel.save(file=str(file_path))
+
+    # Verify file was created and contains expected content
+    assert file_path.exists()
+    content = file_path.read_text()
+    assert '// !!! This file is generated using emlearn !!!' in content
+    assert 'EmlGradientBoosting' in content
+    assert 'eml_trees.h' in content
+    assert code == content
+
+
+def test_gradient_boosting_loadable_requires_int16():
+    """Test that loadable method requires dtype='int16_t'."""
+    X, y = datasets.make_classification(n_samples=50, n_features=4, random_state=42)
+
+    clf = GradientBoostingClassifier(n_estimators=3, random_state=42)
+    clf.fit(X, y)
+
+    with pytest.raises(ValueError, match="int16_t"):
+        emlearn.convert(clf, method='loadable', dtype='float')
 

@@ -82,7 +82,7 @@ at the cost of being less parallelizable during training.
 **Requirements:**
 
 - scikit-learn >= 1.0.0
-- Currently only ``method='inline'`` is supported
+- Both ``method='inline'`` and ``method='loadable'`` are supported
 
 **Binary Classification:**
 
@@ -148,9 +148,24 @@ Gradient Boosting regression works similarly to classification.
     const float prediction = gbr_model_predict(features, features_length);
 
 
+**Inference Methods:**
+
+Both ``inline`` and ``loadable`` methods are supported for GradientBoosting:
+
+- ``inline``: Generates if-else code, supports any dtype (float, int16_t, etc.)
+- ``loadable``: Generates struct-based code using ``eml_trees.h``, requires ``dtype='int16_t'``
+
+.. code-block:: python
+
+    # Inline method (default) - works with float features
+    cmodel = emlearn.convert(clf, method='inline')
+
+    # Loadable method - requires int16 features
+    cmodel = emlearn.convert(clf, method='loadable', dtype='int16_t')
+
+
 **Limitations:**
 
-- Only ``method='inline'`` is supported (``loadable`` coming in a future release)
 - Custom ``init`` estimators are not supported
 - ``HistGradientBoostingClassifier`` and ``HistGradientBoostingRegressor`` are not yet supported
 

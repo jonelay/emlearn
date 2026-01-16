@@ -313,6 +313,243 @@ eml_trees_regress1(const EmlTrees *forest,
 
 #endif // EML_TREES_REGRESSION_ENABLE
 
+
+// ============================================================================
+// Gradient Boosting Support
+// ============================================================================
+
+#ifndef EML_GRADIENT_BOOSTING_ENABLE
+#define EML_GRADIENT_BOOSTING_ENABLE 1
+#endif
+
+#if EML_GRADIENT_BOOSTING_ENABLE
+
+/** @typedef EmlGradientBoosting
+\brief Gradient Boosting model
+
+Wraps an EmlTrees structure with gradient boosting-specific parameters.
+Supports binary classification (sigmoid), multi-class (softmax), and regression.
+*/
+typedef struct _EmlGradientBoosting {
+    EmlTrees trees;           // Underlying tree ensemble
+    float learning_rate;      // Learning rate for tree contributions
+    float initial_value;      // Initial prediction (log-odds for binary, constant for regression)
+    float *initial_values;    // Per-class initial values (multi-class only, NULL otherwise)
+    int8_t n_classes;         // Number of classes (0 for regression)
+    int8_t is_classifier;     // 1 for classifier, 0 for regressor
+} EmlGradientBoosting;
+
+/**
+* \brief Sigmoid activation function
+*/
+static inline float
+eml_sigmoid(float x)
+{
+    return 1.0f / (1.0f + expf(-x));
+}
+
+/**
+* \brief Run gradient boosting regression
+*
+* \param model EmlGradientBoosting instance
+* \param features Input data values
+* \param features_length Length of input data
+*
+* \return The predicted value, or NAN on error
+*/
+static float
+eml_gradient_boosting_regress(const EmlGradientBoosting *model,
+        const int16_t *features, int8_t features_length)
+{
+    const EmlTrees *trees = &model->trees;
+
+    if (trees->leaf_bits != 32) {
+        return NAN;
+    }
+
+    const int leaf_size = 4;
+    float sum = 0.0f;
+
+    for (int32_t i = 0; i < trees->n_trees; i++) {
+        const int32_t leaf_number = eml_trees_predict_tree(trees, trees->tree_roots[i], features, features_length);
+        const int32_t leaf_offset = leaf_number * leaf_size;
+        const float *leaf_data = (float *)(trees->leaves + leaf_offset);
+        sum += *leaf_data;
+    }
+
+    return model->initial_value + model->learning_rate * sum;
+}
+
+/**
+* \brief Run gradient boosting binary classification probability
+*
+* \param model EmlGradientBoosting instance
+* \param features Input data values
+* \param features_length Length of input data
+* \param out Buffer to store probabilities [p_class0, p_class1]
+* \param out_length Length of output buffer (must be 2)
+*
+* \return EmlOk on success, or error on failure
+*/
+static EmlError
+eml_gradient_boosting_predict_proba_binary(const EmlGradientBoosting *model,
+        const int16_t *features, int8_t features_length,
+        float *out, int32_t out_length)
+{
+    EML_PRECONDITION(out_length >= 2, EmlSizeMismatch);
+
+    const EmlTrees *trees = &model->trees;
+
+    if (trees->leaf_bits != 32) {
+        return EmlUnsupported;
+    }
+
+    const int leaf_size = 4;
+    float sum = 0.0f;
+
+    for (int32_t i = 0; i < trees->n_trees; i++) {
+        const int32_t leaf_number = eml_trees_predict_tree(trees, trees->tree_roots[i], features, features_length);
+        const int32_t leaf_offset = leaf_number * leaf_size;
+        const float *leaf_data = (float *)(trees->leaves + leaf_offset);
+        sum += *leaf_data;
+    }
+
+    const float score = model->initial_value + model->learning_rate * sum;
+    const float prob_class1 = eml_sigmoid(score);
+    out[1] = prob_class1;
+    out[0] = 1.0f - prob_class1;
+
+    return EmlOk;
+}
+
+/**
+* \brief Run gradient boosting multi-class classification probability
+*
+* \param model EmlGradientBoosting instance
+* \param features Input data values
+* \param features_length Length of input data
+* \param out Buffer to store probabilities
+* \param out_length Length of output buffer (must be n_classes)
+*
+* \return EmlOk on success, or error on failure
+*/
+static EmlError
+eml_gradient_boosting_predict_proba_multiclass(const EmlGradientBoosting *model,
+        const int16_t *features, int8_t features_length,
+        float *out, int32_t out_length)
+{
+    const int n_classes = model->n_classes;
+    EML_PRECONDITION(out_length >= n_classes, EmlSizeMismatch);
+
+    const EmlTrees *trees = &model->trees;
+
+    if (trees->leaf_bits != 32) {
+        return EmlUnsupported;
+    }
+
+    const int leaf_size = 4;
+    const int trees_per_iteration = n_classes;
+    const int n_iterations = trees->n_trees / trees_per_iteration;
+
+    // Initialize scores with initial values
+    for (int k = 0; k < n_classes; k++) {
+        out[k] = (model->initial_values != NULL) ? model->initial_values[k] : 0.0f;
+    }
+
+    // Accumulate tree predictions
+    for (int iter = 0; iter < n_iterations; iter++) {
+        for (int k = 0; k < n_classes; k++) {
+            const int tree_idx = iter * n_classes + k;
+            const int32_t leaf_number = eml_trees_predict_tree(trees, trees->tree_roots[tree_idx], features, features_length);
+            const int32_t leaf_offset = leaf_number * leaf_size;
+            const float *leaf_data = (float *)(trees->leaves + leaf_offset);
+            out[k] += model->learning_rate * (*leaf_data);
+        }
+    }
+
+    // Apply softmax
+    float max_score = out[0];
+    for (int k = 1; k < n_classes; k++) {
+        if (out[k] > max_score) max_score = out[k];
+    }
+
+    float sum_exp = 0.0f;
+    for (int k = 0; k < n_classes; k++) {
+        out[k] = expf(out[k] - max_score);
+        sum_exp += out[k];
+    }
+
+    if (sum_exp < 1e-10f) sum_exp = 1e-10f;  // Numerical stability
+
+    for (int k = 0; k < n_classes; k++) {
+        out[k] /= sum_exp;
+    }
+
+    return EmlOk;
+}
+
+/**
+* \brief Run gradient boosting classification probability
+*
+* \param model EmlGradientBoosting instance
+* \param features Input data values
+* \param features_length Length of input data
+* \param out Buffer to store probabilities
+* \param out_length Length of output buffer
+*
+* \return EmlOk on success, or error on failure
+*/
+static EmlError
+eml_gradient_boosting_predict_proba(const EmlGradientBoosting *model,
+        const int16_t *features, int8_t features_length,
+        float *out, int32_t out_length)
+{
+    if (model->n_classes == 2) {
+        return eml_gradient_boosting_predict_proba_binary(model, features, features_length, out, out_length);
+    } else {
+        return eml_gradient_boosting_predict_proba_multiclass(model, features, features_length, out, out_length);
+    }
+}
+
+/**
+* \brief Run gradient boosting classification
+*
+* \param model EmlGradientBoosting instance
+* \param features Input data values
+* \param features_length Length of input data
+*
+* \return The predicted class, or negative error code on failure
+*/
+static int32_t
+eml_gradient_boosting_predict(const EmlGradientBoosting *model,
+        const int16_t *features, int8_t features_length)
+{
+    const int n_classes = model->n_classes;
+
+    if (n_classes > EMTREES_MAX_CLASSES) {
+        return -EmlTreesErrorLength;
+    }
+
+    float proba[EMTREES_MAX_CLASSES];
+    const EmlError err = eml_gradient_boosting_predict_proba(model, features, features_length, proba, n_classes);
+    if (err != EmlOk) {
+        return -EmlTreesUnknownError;
+    }
+
+    int32_t best_class = 0;
+    float best_prob = proba[0];
+    for (int k = 1; k < n_classes; k++) {
+        if (proba[k] > best_prob) {
+            best_prob = proba[k];
+            best_class = k;
+        }
+    }
+
+    return best_class;
+}
+
+#endif // EML_GRADIENT_BOOSTING_ENABLE
+
 #ifdef __cplusplus
 }
 #endif
