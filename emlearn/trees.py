@@ -10,8 +10,13 @@ import warnings
 import math
 
 import numpy
+import sklearn
+from packaging import version as pkg_version
 
 from . import common, cgen
+
+# Minimum sklearn version required for GradientBoosting support
+MIN_SKLEARN_VERSION = "1.0.0"
 
 SUPPORTED_ESTIMATORS=[
     'RandomForestClassifier',
@@ -20,6 +25,11 @@ SUPPORTED_ESTIMATORS=[
     'RandomForestRegressor',
     'ExtraTreesRegressor',
     'DecisionTreeRegressor',
+]
+
+GRADIENT_BOOSTING_ESTIMATORS=[
+    'GradientBoostingClassifier',
+    'GradientBoostingRegressor',
 ]
 
 
@@ -908,6 +918,498 @@ class Wrapper:
             code = '\r\n'.join(lines) 
         else:
             raise ValueError(f"Unsupported format: {format}")
+
+        if file:
+            with open(file, 'w') as f:
+                f.write(code)
+
+        return code
+
+
+def generate_c_gradient_boosting_inlined(forest, name, n_features, learning_rate,
+                                          initial_value, n_classes=0, dtype='float',
+                                          classifier=True, weight_modifiers='static const'):
+    """Generate inline C code for gradient boosting inference."""
+    nodes, roots, leaves = forest
+
+    cgen.assert_valid_identifier(name)
+
+    tree_names = [name + '_tree_{}'.format(i) for i, _ in enumerate(roots)]
+    ctype = dtype
+    indent = 2
+
+    def c_leaf(data, depth):
+        value = cgen.constant(data, dtype='float')
+        return (depth * indent * ' ') + "return {};".format(value)
+
+    def c_internal(n, depth):
+        f = """{indent}if (features[{feature}] < {value}) {{
+        {left}
+        {indent}}} else {{
+        {right}
+        {indent}}}""".format(**{
+            'feature': cgen.constant(n[0], dtype='int'),
+            'value': cgen.constant(n[1], dtype=dtype),
+            'left': c_node(n[2], depth + 1),
+            'right': c_node(n[3], depth + 1),
+            'indent': depth * indent * ' ',
+        })
+        return f
+
+    def c_node(idx, depth):
+        if idx < 0:
+            leaf_idx = -idx - 1
+            leaf_value = leaves[leaf_idx]
+            return c_leaf(leaf_value, depth + 1)
+        else:
+            return c_internal(nodes[idx], depth + 1)
+
+    def tree_func(name, root):
+        return """static inline float {function_name}(const {ctype} *features, int32_t features_length) {{
+        {code}
+        }}
+        """.format(**{
+            'function_name': name,
+            'code': c_node(root, 0),
+            'ctype': ctype,
+        })
+
+    tree_funcs = [tree_func(n, r) for n, r in zip(tree_names, roots)]
+
+    # Generate tree prediction accumulation
+    def tree_accumulate(name):
+        return 'score += {}(features, features_length);'.format(name)
+
+    if classifier and n_classes == 2:
+        # Binary classification: apply sigmoid
+        # initial_value is the log-odds from class prior
+        forest_func = """float {function_name}(const {ctype} *features, int32_t features_length) {{
+        float score = 0.0f;
+
+        {tree_predictions}
+
+        // Apply learning rate and add initial log-odds
+        score = {initial_value} + {learning_rate} * score;
+
+        // Apply sigmoid
+        return 1.0f / (1.0f + expf(-score));
+    }}
+    """.format(**{
+            'function_name': name + "_predict_proba_class1",
+            'initial_value': cgen.constant(initial_value, dtype='float'),
+            'learning_rate': cgen.constant(learning_rate, dtype='float'),
+            'tree_predictions': '\n        '.join([tree_accumulate(n) for n in tree_names]),
+            'ctype': ctype,
+        })
+
+        predict_func = """int32_t {function_name}(const {ctype} *features, int32_t features_length) {{
+        const float prob = {name}_predict_proba_class1(features, features_length);
+        return (prob >= 0.5f) ? 1 : 0;
+    }}
+    """.format(**{
+            'function_name': name + "_predict",
+            'name': name,
+            'ctype': ctype,
+        })
+
+        proba_func = """int {function_name}(const {ctype} *features, int32_t features_length, float *out, int out_length) {{
+        if (out_length < 2) return -1;  // Bounds check
+        const float prob1 = {name}_predict_proba_class1(features, features_length);
+        out[0] = 1.0f - prob1;
+        out[1] = prob1;
+        return 0;
+    }}
+    """.format(**{
+            'function_name': name + "_predict_proba",
+            'name': name,
+            'ctype': ctype,
+        })
+
+        forest_funcs = [forest_func, predict_func, proba_func]
+
+    elif classifier and n_classes > 2:
+        # Multi-class: trees are organized as [n_estimators, n_classes]
+        # Need to accumulate scores per class and apply softmax
+        n_estimators = len(roots) // n_classes
+
+        class_score_accum = []
+        for k in range(n_classes):
+            tree_indices = [i * n_classes + k for i in range(n_estimators)]
+            tree_calls = ' + '.join([f'{tree_names[idx]}(features, features_length)' for idx in tree_indices])
+            init_val = cgen.constant(initial_value[k], dtype='float')
+            lr_val = cgen.constant(learning_rate, dtype='float')
+            class_score_accum.append(f'scores[{k}] = {init_val} + {lr_val} * ({tree_calls});')
+
+        forest_func = """void {function_name}_raw_scores(const {ctype} *features, int32_t features_length, float *scores) {{
+        {class_scores}
+    }}
+    """.format(**{
+            'function_name': name,
+            'class_scores': '\n        '.join(class_score_accum),
+            'ctype': ctype,
+        })
+
+        predict_func = """int32_t {function_name}(const {ctype} *features, int32_t features_length) {{
+        float scores[{n_classes}];
+        {name}_raw_scores(features, features_length, scores);
+
+        // Find argmax
+        int32_t best_class = 0;
+        float best_score = scores[0];
+        for (int32_t i = 1; i < {n_classes}; i++) {{
+            if (scores[i] > best_score) {{
+                best_score = scores[i];
+                best_class = i;
+            }}
+        }}
+        return best_class;
+    }}
+    """.format(**{
+            'function_name': name + "_predict",
+            'name': name,
+            'n_classes': n_classes,
+            'ctype': ctype,
+        })
+
+        proba_func = """int {function_name}(const {ctype} *features, int32_t features_length, float *out, int out_length) {{
+        if (out_length < {n_classes}) return -1;  // Bounds check
+
+        float scores[{n_classes}];
+        {name}_raw_scores(features, features_length, scores);
+
+        // Apply softmax
+        float max_score = scores[0];
+        for (int i = 1; i < {n_classes}; i++) {{
+            if (scores[i] > max_score) max_score = scores[i];
+        }}
+
+        float sum_exp = 0.0f;
+        for (int i = 0; i < {n_classes}; i++) {{
+            out[i] = expf(scores[i] - max_score);
+            sum_exp += out[i];
+        }}
+
+        // Numerical stability: prevent division by zero
+        if (sum_exp < 1e-10f) sum_exp = 1e-10f;
+
+        for (int i = 0; i < {n_classes}; i++) {{
+            out[i] /= sum_exp;
+        }}
+
+        return 0;
+    }}
+    """.format(**{
+            'function_name': name + "_predict_proba",
+            'name': name,
+            'n_classes': n_classes,
+            'ctype': ctype,
+        })
+
+        forest_funcs = [forest_func, predict_func, proba_func]
+
+    else:
+        # Regression: simple sum with learning rate and initial value
+        forest_func = """float {function_name}(const {ctype} *features, int32_t features_length) {{
+        float score = 0.0f;
+
+        {tree_predictions}
+
+        return {initial_value} + {learning_rate} * score;
+    }}
+    """.format(**{
+            'function_name': name + "_predict",
+            'initial_value': cgen.constant(initial_value, dtype='float'),
+            'learning_rate': cgen.constant(learning_rate, dtype='float'),
+            'tree_predictions': '\n        '.join([tree_accumulate(n) for n in tree_names]),
+            'ctype': ctype,
+        })
+
+        forest_funcs = [forest_func]
+
+    head = """
+    // !!! This file is generated using emlearn !!!
+
+    #include <stdint.h>
+    #include <math.h>
+    """
+
+    parts = [head] + tree_funcs + forest_funcs
+    out = '\n\n'.join(parts)
+
+    return out
+
+
+class GradientBoostingWrapper:
+    """Wrapper for GradientBoosting models from scikit-learn.
+
+    Converts GradientBoostingClassifier and GradientBoostingRegressor to C code
+    for embedded deployment. Supports binary classification (with sigmoid),
+    multi-class classification (with softmax), and regression.
+
+    Requires scikit-learn >= 1.0.0.
+
+    Args:
+        estimator: A fitted sklearn GradientBoostingClassifier or
+            GradientBoostingRegressor instance.
+        method: Inference method. Currently only 'inline' is supported.
+            'loadable' will be added in a future release.
+        dtype: Data type for features in generated C code.
+            Defaults to 'float'.
+
+    Raises:
+        ImportError: If sklearn version is below 1.0.0.
+        ValueError: If method is not 'inline' or 'loadable'.
+        ValueError: If method='loadable' (not yet supported).
+        ValueError: If custom init estimator is used without required attributes.
+        ValueError: If class priors are too extreme (< 1e-10) for binary classification.
+
+    Attributes:
+        classifier_: Compiled classifier instance (created on first predict call).
+        forest_: Flattened forest representation of the gradient boosting trees.
+        n_features: Number of input features.
+        n_classes: Number of classes (0 for regression).
+        learning_rate: Learning rate from the estimator.
+        initial_value: Initial prediction value(s) from the estimator.
+
+    Example:
+        >>> from sklearn.ensemble import GradientBoostingClassifier
+        >>> import emlearn
+        >>> clf = GradientBoostingClassifier(n_estimators=10)
+        >>> clf.fit(X_train, y_train)
+        >>> cmodel = emlearn.convert(clf, method='inline')
+        >>> cmodel.save(file='model.h')
+    """
+
+    def __init__(self, estimator, method, dtype='float'):
+        # Check sklearn version compatibility
+        if pkg_version.parse(sklearn.__version__) < pkg_version.parse(MIN_SKLEARN_VERSION):
+            raise ImportError(
+                f"GradientBoosting support requires sklearn >= {MIN_SKLEARN_VERSION}, "
+                f"got {sklearn.__version__}"
+            )
+
+        if method is None:
+            method = 'inline'
+
+        self.dtype = dtype
+        if self.dtype is None:
+            self.dtype = 'float'
+
+        kind = type(estimator).__name__
+        self.is_classifier = 'Classifier' in kind
+        self.out_dtype = "int" if self.is_classifier else "float"
+
+        # Extract learning rate
+        self.learning_rate = estimator.learning_rate
+
+        # Extract initial value from init_ estimator
+        if self.is_classifier:
+            self.n_classes = estimator.n_classes_
+            if self.n_classes == 2:
+                # Binary: init_ provides log-odds
+                # For DummyClassifier with strategy='prior', we compute log-odds
+                if not hasattr(estimator.init_, 'class_prior_'):
+                    raise ValueError(
+                        "GradientBoosting with custom init estimator not supported. "
+                        "Use default init or ensure init has class_prior_ attribute."
+                    )
+                class_prior = estimator.init_.class_prior_
+                # Validate class priors are not extreme (would cause log(0) or division by zero)
+                if class_prior[0] < 1e-10 or class_prior[1] < 1e-10:
+                    raise ValueError(
+                        "GradientBoosting conversion requires non-extreme class priors. "
+                        f"Got class_prior={class_prior}. Consider rebalancing your dataset."
+                    )
+                # log(p1/p0) = log(p1) - log(p0)
+                self.initial_value = float(numpy.log(class_prior[1] / class_prior[0]))
+            else:
+                # Multi-class: one initial value per class
+                # sklearn's default DummyClassifier with strategy='prior' produces 0.0 for
+                # multi-class when using softmax (log-probabilities sum to 0 initially)
+                self.initial_value = [0.0] * self.n_classes
+        else:
+            self.n_classes = 0
+            # Regression: init_ is DummyRegressor with constant_
+            if not hasattr(estimator.init_, 'constant_'):
+                raise ValueError(
+                    "GradientBoosting with custom init estimator not supported. "
+                    "Use default init or ensure init has constant_ attribute."
+                )
+            self.initial_value = float(estimator.init_.constant_[0, 0])
+
+        # Extract trees - GradientBoosting uses 2D array: [n_estimators, n_outputs]
+        # For regression/binary: n_outputs=1, for multiclass: n_outputs=n_classes
+        estimators_2d = estimator.estimators_
+        n_estimators, n_outputs = estimators_2d.shape
+
+        # Flatten trees in the correct order
+        trees = []
+        if self.is_classifier and self.n_classes > 2:
+            # Multi-class: trees are [iter0_class0, iter0_class1, ..., iter1_class0, ...]
+            for i in range(n_estimators):
+                for k in range(n_outputs):
+                    trees.append(estimators_2d[i, k].tree_)
+        else:
+            # Binary/regression: single tree per iteration
+            for i in range(n_estimators):
+                trees.append(estimators_2d[i, 0].tree_)
+
+        # Flatten forest using 'value' leaf type (regression values)
+        self.forest_ = flatten_forest(trees, leaf='value', leaf_bits=32)
+        self.forest_ = remove_duplicate_leaves(self.forest_)
+
+        self.n_features = estimator.n_features_in_
+        self.method = method
+
+        if self.method not in ('loadable', 'inline'):
+            raise ValueError("Unsupported inference method '{}'".format(self.method))
+
+        if self.method == 'loadable':
+            raise ValueError("Inference method='loadable' not yet supported for GradientBoosting. Use method='inline'")
+
+        self.classifier_ = None
+
+    def _build_classifier(self):
+        if self.classifier_ is not None:
+            return
+
+        name = 'mygbt'
+        n_features = self.n_features
+        n_classes = self.n_classes
+        feature_dtype = self.dtype
+
+        model_init = self.save(name=name)
+
+        return_type = 'int32_t' if self.is_classifier else 'float'
+
+        if self.is_classifier:
+            wrapper_functions = [
+                f"""
+                {return_type}
+                predict_wrapper(const float *values, int length) {{
+                    {feature_dtype} features[{n_features}];
+                    for (int i=0; i<length; i++) {{
+                        features[i] = ({feature_dtype})values[i];
+                    }}
+                    return {name}_predict(features, length);
+                }}""",
+                f"""
+                int
+                predict_proba_wrapper(const float *values, int length, float *outputs, int n_outputs) {{
+                    {feature_dtype} features[{n_features}];
+                    for (int i=0; i<length; i++) {{
+                        features[i] = ({feature_dtype})values[i];
+                    }}
+                    return {name}_predict_proba(features, length, outputs, n_outputs);
+                }}
+                """,
+            ]
+            proba_func = 'predict_proba_wrapper(values, length, outputs, N_CLASSES)'
+        else:
+            wrapper_functions = [
+                f"""
+                float
+                regress_wrapper(const float *values, int length) {{
+                    {feature_dtype} features[{n_features}];
+                    for (int i=0; i<length; i++) {{
+                        features[i] = ({feature_dtype})values[i];
+                    }}
+                    return {name}_predict(features, length);
+                }}
+                """,
+            ]
+            proba_func = None
+
+        code = '\n'.join([model_init] + wrapper_functions)
+
+        predict_func = 'predict_wrapper(values, length)'
+        regress_func = 'regress_wrapper(values, length)'
+
+        if self.is_classifier:
+            call_func = predict_func
+        else:
+            call_func = regress_func
+            proba_func = None
+
+        self.classifier_ = common.CompiledClassifier(code, name=name,
+            call=call_func, proba_call=proba_func,
+            out_dtype=self.out_dtype, n_classes=self.n_classes,
+        )
+
+    def predict(self, X):
+        """Predict class labels or regression values.
+
+        Args:
+            X: Input features as a 2D array-like of shape (n_samples, n_features).
+
+        Returns:
+            numpy.ndarray: Predicted class labels (classifier) or values (regressor).
+        """
+        self._build_classifier()
+
+        if self.is_classifier:
+            predictions = self.classifier_.predict(X)
+        else:
+            predictions = self.classifier_.regress(X)
+
+        return predictions
+
+    def predict_proba(self, X):
+        """Predict class probabilities (classifier only).
+
+        Args:
+            X: Input features as a 2D array-like of shape (n_samples, n_features).
+
+        Returns:
+            numpy.ndarray: Class probabilities of shape (n_samples, n_classes).
+
+        Raises:
+            ValueError: If called on a regressor.
+        """
+        self._build_classifier()
+
+        if not self.is_classifier:
+            raise ValueError("Cannot call predict_proba on a Regressor")
+
+        probabilities = self.classifier_.predict_proba(X)
+        return probabilities
+
+    def save(self, name=None, file=None, format='c'):
+        """Save the model as C code.
+
+        Args:
+            name: Name for the generated C functions. If not provided,
+                derived from file path.
+            file: Path to write the generated C code. If None, code is
+                only returned as a string.
+            format: Output format. Only 'c' is supported for GradientBoosting.
+
+        Returns:
+            str: Generated C code.
+
+        Raises:
+            ValueError: If neither name nor file is provided.
+            ValueError: If format is not 'c'.
+        """
+        if name is None:
+            if file is None:
+                raise ValueError('Either name or file must be provided')
+            else:
+                name = os.path.splitext(os.path.basename(file))[0]
+
+        if format != 'c':
+            raise ValueError(f"Only format='c' is supported for GradientBoosting, got '{format}'")
+
+        code = generate_c_gradient_boosting_inlined(
+            forest=self.forest_,
+            name=name,
+            n_features=self.n_features,
+            learning_rate=self.learning_rate,
+            initial_value=self.initial_value,
+            n_classes=self.n_classes,
+            dtype=self.dtype,
+            classifier=self.is_classifier,
+        )
 
         if file:
             with open(file, 'w') as f:

@@ -69,6 +69,8 @@ def convert(estimator,
     if kind in set(trees.SUPPORTED_ESTIMATORS):
         # return_type is intentionally not passed through - the Wrapper will guess based on Class name
         return trees.Wrapper(estimator, method, dtype=dtype, **kwargs)
+    elif kind in set(trees.GRADIENT_BOOSTING_ESTIMATORS):
+        return trees.GradientBoostingWrapper(estimator, method, dtype=dtype)
     elif kind in ['EllipticEnvelope']:
         if dtype is None:
             dtype = 'float'

@@ -10,6 +10,7 @@ import pandas
 from sklearn import datasets
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 import sklearn.model_selection
 import sklearn.metrics
@@ -52,6 +53,20 @@ CLASSIFICATION_DATASETS = {
 
 REGRESSION_DATASETS = {
     '1out': datasets.make_regression(n_targets=1, n_samples=100, random_state=random),
+}
+
+# Gradient Boosting models
+GRADIENT_BOOSTING_CLASSIFIERS = {
+    'GBC': GradientBoostingClassifier(n_estimators=10, max_depth=3, random_state=random),
+}
+
+GRADIENT_BOOSTING_REGRESSORS = {
+    'GBR': GradientBoostingRegressor(n_estimators=10, max_depth=3, random_state=random),
+}
+
+# Multi-class dataset for GradientBoosting
+MULTICLASS_DATASETS = {
+    '3way': datasets.make_classification(n_classes=3, n_informative=3, n_redundant=0, n_samples=100, random_state=random),
 }
 
 METHODS = ['loadable', 'inline']
@@ -389,5 +404,181 @@ def test_trees_loadable_unsupported_dtype(dtype):
 
     with pytest.raises(ValueError, match='loadable'):
         cmodel = emlearn.convert(estimator, method='loadable', dtype=dtype)
+
+
+# ============================================================================
+# Gradient Boosting Tests
+# ============================================================================
+
+@pytest.mark.parametrize("data", CLASSIFICATION_DATASETS.keys())
+@pytest.mark.parametrize("model", GRADIENT_BOOSTING_CLASSIFIERS.keys())
+def test_gradient_boosting_classifier_predict(data, model):
+    """Test GradientBoostingClassifier conversion and prediction."""
+    X, y = CLASSIFICATION_DATASETS[data]
+    estimator = GRADIENT_BOOSTING_CLASSIFIERS[model]
+
+    estimator.fit(X, y)
+    cmodel = emlearn.convert(estimator, method='inline')
+
+    pred_original = estimator.predict(X[:10])
+    pred_c = cmodel.predict(X[:10])
+    numpy.testing.assert_equal(pred_c, pred_original)
+
+
+@pytest.mark.parametrize("data", CLASSIFICATION_DATASETS.keys())
+@pytest.mark.parametrize("model", GRADIENT_BOOSTING_CLASSIFIERS.keys())
+def test_gradient_boosting_classifier_proba(data, model):
+    """Test GradientBoostingClassifier probability estimation."""
+    X, y = CLASSIFICATION_DATASETS[data]
+    estimator = GRADIENT_BOOSTING_CLASSIFIERS[model]
+
+    estimator.fit(X, y)
+    cmodel = emlearn.convert(estimator, method='inline')
+
+    proba_original = estimator.predict_proba(X[:10])
+    proba_c = cmodel.predict_proba(X[:10])
+
+    # Allow some tolerance due to floating point differences
+    numpy.testing.assert_allclose(proba_c, proba_original, rtol=0.02, atol=0.02)
+
+
+@pytest.mark.parametrize("data", MULTICLASS_DATASETS.keys())
+@pytest.mark.parametrize("model", GRADIENT_BOOSTING_CLASSIFIERS.keys())
+def test_gradient_boosting_classifier_multiclass(data, model):
+    """Test GradientBoostingClassifier with multi-class datasets."""
+    X, y = MULTICLASS_DATASETS[data]
+    estimator = GRADIENT_BOOSTING_CLASSIFIERS[model]
+
+    estimator.fit(X, y)
+    cmodel = emlearn.convert(estimator, method='inline')
+
+    # Test predictions
+    pred_original = estimator.predict(X[:10])
+    pred_c = cmodel.predict(X[:10])
+    numpy.testing.assert_equal(pred_c, pred_original)
+
+    # Test probabilities
+    proba_original = estimator.predict_proba(X[:10])
+    proba_c = cmodel.predict_proba(X[:10])
+    numpy.testing.assert_allclose(proba_c, proba_original, rtol=0.02, atol=0.02)
+
+
+@pytest.mark.parametrize("data", REGRESSION_DATASETS.keys())
+@pytest.mark.parametrize("model", GRADIENT_BOOSTING_REGRESSORS.keys())
+def test_gradient_boosting_regressor_predict(data, model):
+    """Test GradientBoostingRegressor conversion and prediction."""
+    X, y = REGRESSION_DATASETS[data]
+    estimator = GRADIENT_BOOSTING_REGRESSORS[model]
+
+    estimator.fit(X, y)
+    cmodel = emlearn.convert(estimator, method='inline')
+
+    pred_original = estimator.predict(X[:10])
+    pred_c = cmodel.predict(X[:10])
+
+    numpy.testing.assert_allclose(pred_c, pred_original, rtol=1e-3, atol=1e-3)
+
+
+def test_gradient_boosting_loadable_not_supported():
+    """Test that loadable method raises error for GradientBoosting."""
+    X, y = datasets.make_classification(n_samples=50, n_features=4, random_state=42)
+    estimator = GradientBoostingClassifier(n_estimators=3, random_state=42)
+    estimator.fit(X, y)
+
+    with pytest.raises(ValueError, match='loadable'):
+        emlearn.convert(estimator, method='loadable')
+
+
+def test_gradient_boosting_single_estimator():
+    """Test GradientBoosting with n_estimators=1."""
+    X, y = datasets.make_classification(n_samples=50, n_features=4, random_state=42)
+
+    # Test classifier
+    clf = GradientBoostingClassifier(n_estimators=1, random_state=42)
+    clf.fit(X, y)
+    cmodel = emlearn.convert(clf, method='inline')
+
+    pred_original = clf.predict(X[:10])
+    pred_c = cmodel.predict(X[:10])
+    numpy.testing.assert_equal(pred_c, pred_original)
+
+    # Test regressor
+    X_reg, y_reg = datasets.make_regression(n_samples=50, n_features=4, random_state=42)
+    reg = GradientBoostingRegressor(n_estimators=1, random_state=42)
+    reg.fit(X_reg, y_reg)
+    cmodel_reg = emlearn.convert(reg, method='inline')
+
+    pred_reg_original = reg.predict(X_reg[:10])
+    pred_reg_c = cmodel_reg.predict(X_reg[:10])
+    numpy.testing.assert_allclose(pred_reg_c, pred_reg_original, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.parametrize("learning_rate", [0.001, 0.1, 1.0])
+def test_gradient_boosting_learning_rates(learning_rate):
+    """Test GradientBoosting with various learning rates."""
+    X, y = datasets.make_classification(n_samples=50, n_features=4, random_state=42)
+
+    clf = GradientBoostingClassifier(n_estimators=5, learning_rate=learning_rate, random_state=42)
+    clf.fit(X, y)
+    cmodel = emlearn.convert(clf, method='inline')
+
+    pred_original = clf.predict(X[:10])
+    pred_c = cmodel.predict(X[:10])
+    numpy.testing.assert_equal(pred_c, pred_original)
+
+    proba_original = clf.predict_proba(X[:10])
+    proba_c = cmodel.predict_proba(X[:10])
+    numpy.testing.assert_allclose(proba_c, proba_original, rtol=0.02, atol=0.02)
+
+
+def test_gradient_boosting_extreme_class_prior_validation():
+    """Test that extreme class prior validation works correctly.
+
+    The validation is for class priors < 1e-10 which prevents division by zero
+    in log(p1/p0). This is extremely rare in practice (would require ~10 billion
+    samples to have a class prior that low), so we test by directly calling the
+    wrapper with a mocked estimator.
+    """
+    from unittest.mock import Mock, patch
+
+    X, y = datasets.make_classification(n_samples=50, n_features=4, random_state=42)
+
+    # Create a fitted classifier
+    clf = GradientBoostingClassifier(n_estimators=3, random_state=42)
+    clf.fit(X, y)
+
+    # Mock the init_ estimator to have extreme class priors
+    original_init = clf.init_
+    mock_init = Mock()
+    mock_init.class_prior_ = numpy.array([1e-15, 1 - 1e-15])  # Extremely imbalanced
+
+    clf.init_ = mock_init
+
+    # Should raise ValueError due to extreme class prior
+    with pytest.raises(ValueError, match='class priors'):
+        emlearn.convert(clf, method='inline')
+
+    # Restore original init for cleanup
+    clf.init_ = original_init
+
+
+def test_gradient_boosting_save_to_file(tmp_path):
+    """Test saving GradientBoosting model to file."""
+    X, y = datasets.make_classification(n_samples=50, n_features=4, random_state=42)
+
+    clf = GradientBoostingClassifier(n_estimators=3, random_state=42)
+    clf.fit(X, y)
+    cmodel = emlearn.convert(clf, method='inline')
+
+    # Save to file
+    file_path = tmp_path / "gradient_boosting_model.h"
+    code = cmodel.save(file=str(file_path))
+
+    # Verify file was created and contains expected content
+    assert file_path.exists()
+    content = file_path.read_text()
+    assert '// !!! This file is generated using emlearn !!!' in content
+    assert 'gradient_boosting_model_predict' in content
+    assert code == content
 
 
