@@ -17,6 +17,7 @@ C API
    :titlesonly:
 
    eml_trees.rst
+   eml_gbtrees.rst
    eml_net.rst
    eml_bayes.rst
    eml_distance.rst

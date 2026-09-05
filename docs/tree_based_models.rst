@@ -68,8 +68,116 @@ In this case the generated ``predict()`` function returns a float instead of an 
 
 .. code-block:: c
 
-    // use "loadable" strategy for regression 
+    // use "loadable" strategy for regression
     const float out = mymodel_predict(mymodel, features, features_length)
+
+
+Gradient Boosting
+===========================
+
+emlearn supports Gradient Boosting models including ``GradientBoostingClassifier`` and ``GradientBoostingRegressor``
+from scikit-learn. These models often achieve slightly better predictive performance than Random Forest,
+at the cost of being less parallelizable during training.
+
+Requirements
+---------------------------
+
+- scikit-learn >= 1.0.0
+- Both ``method='inline'`` and ``method='loadable'`` are supported
+
+Binary Classification
+---------------------------
+
+For binary classification, GradientBoosting uses a sigmoid function to convert the tree outputs to probabilities.
+
+.. code-block:: python
+
+    from sklearn.ensemble import GradientBoostingClassifier
+    import emlearn
+
+    clf = GradientBoostingClassifier(n_estimators=10, max_depth=3)
+    clf.fit(X_train, y_train)
+
+    cmodel = emlearn.convert(clf, method='inline')
+    cmodel.save(file='gbc_model.h')
+
+.. code-block:: c
+
+    #include "gbc_model.h"
+
+    // Predict class
+    const int cls = gbc_model_predict(features, features_length);
+
+    // Predict probabilities
+    float probabilities[2];
+    gbc_model_predict_proba(features, features_length, probabilities, 2);
+
+
+Multi-class Classification
+---------------------------
+
+Multi-class classification uses softmax to convert tree outputs to probabilities.
+
+.. code-block:: python
+
+    from sklearn.ensemble import GradientBoostingClassifier
+
+    clf = GradientBoostingClassifier(n_estimators=10, max_depth=3)
+    clf.fit(X_train, y_train)  # y_train has >2 classes
+
+    cmodel = emlearn.convert(clf, method='inline')
+    cmodel.save(file='gbc_multiclass.h')
+
+
+Regression
+---------------------------
+
+Gradient Boosting regression works similarly to classification.
+
+.. code-block:: python
+
+    from sklearn.ensemble import GradientBoostingRegressor
+    import emlearn
+
+    reg = GradientBoostingRegressor(n_estimators=10, max_depth=3)
+    reg.fit(X_train, y_train)
+
+    cmodel = emlearn.convert(reg, method='inline')
+    cmodel.save(file='gbr_model.h')
+
+.. code-block:: c
+
+    #include "gbr_model.h"
+
+    const float prediction = gbr_model_predict(features, features_length);
+
+
+Inference Methods
+---------------------------
+
+Both ``inline`` and ``loadable`` methods are supported for GradientBoosting:
+
+- ``inline``: Generates if-else code, supports ``float``, ``int32_t``, ``int16_t``, ``int8_t``
+- ``loadable``: Generates struct-based code using ``eml_gbtrees.h``, requires ``dtype='int16_t'``
+
+.. code-block:: python
+
+    # Inline method (default) - works with float features
+    cmodel = emlearn.convert(clf, method='inline')
+
+    # Loadable method - requires int16 features
+    cmodel = emlearn.convert(clf, method='loadable', dtype='int16_t')
+
+
+Limitations
+---------------------------
+
+- Custom ``init`` estimators are not supported
+- ``loss='exponential'`` is not supported (use ``loss='log_loss'``)
+- ``HistGradientBoostingClassifier`` and ``HistGradientBoostingRegressor`` are not yet supported
+- Loadable mode requires ``dtype='int16_t'``
+- Maximum 127 features (``int8_t`` feature index in loadable mode)
+- Maximum 30 classes for loadable mode
 
 
 Inference method: Inline vs loadable 

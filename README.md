@@ -73,12 +73,14 @@ See the [Made with emlearn](https://emlearn.readthedocs.io/en/latest/made_with.h
 Classification:
 
 * `eml_trees`: sklearn.RandomForestClassifier, sklearn.ExtraTreesClassifier, sklearn.DecisionTreeClassifier
+* `eml_gbtrees`: sklearn.GradientBoostingClassifier
 * `eml_net`: sklearn.MultiLayerPerceptron, Keras.Sequential with fully-connected layers
 * `eml_bayes`: sklearn.GaussianNaiveBayes
 
 Regression:
 
 * `eml_trees`: sklearn.RandomForestRegressor, sklearn.ExtraTreesRegressor, sklearn.DecisionTreeRegressor
+* `eml_gbtrees`: sklearn.GradientBoostingRegressor
 * `eml_net`: Keras.Sequential with fully-connected layers
 
 Unsupervised / Outlier Detection / Anomaly Detection
