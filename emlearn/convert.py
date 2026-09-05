@@ -6,6 +6,7 @@ Convert a Python model into C code
 """
 
 from . import trees
+from . import gbtrees
 from . import net
 from . import bayes
 from . import distance
@@ -57,7 +58,7 @@ def convert(estimator,
     :param kind: Explicit name for the type of model. Useful if the model is a subclass of a supported model class
     :param method: The inference strategy to use. inline|loadable
     :param dtype: Datatype to use for features. Can be used to enable quantization
-    :param leaf_bits: Number of bits to use for leaf nodes in tree-based models. 0 for hard majority voting, or 3-8 bits for soft-voting using class proportions.
+    :param leaf_bits: Number of bits to use for leaf nodes in RandomForest/DecisionTree models. 0 for hard majority voting, or 3-8 bits for soft-voting using class proportions. Not applicable to GradientBoosting (uses 32-bit float leaves internally).
     :param return_type: Return type of the model. 'classifier' (default) creates a classifier (output binarized when needed),  'regressor' creates a regressor (output type is float).
     :return: A Estimator like class, that uses C code for inference
     """
@@ -69,6 +70,8 @@ def convert(estimator,
     if kind in set(trees.SUPPORTED_ESTIMATORS):
         # return_type is intentionally not passed through - the Wrapper will guess based on Class name
         return trees.Wrapper(estimator, method, dtype=dtype, **kwargs)
+    elif kind in set(gbtrees.SUPPORTED_ESTIMATORS):
+        return gbtrees.Wrapper(estimator, method, dtype=dtype, **kwargs)
     elif kind in ['EllipticEnvelope']:
         if dtype is None:
             dtype = 'float'

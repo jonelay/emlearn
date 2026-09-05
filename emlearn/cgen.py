@@ -47,7 +47,10 @@ def constant(val, dtype='float'):
     "3.14f"
     """
     if dtype == 'float':
-        return "{:.6f}f".format(val)
+        s = "{:.9g}".format(val)
+        if '.' not in s and 'e' not in s and 'E' not in s:
+            s += '.0'
+        return s + 'f'
     elif 'int' in dtype:
         return "{:d}".format(int(val))
     else:
@@ -65,7 +68,7 @@ def constant_declare(name, val, dtype='int'):
 
     >>> from emlearn import cgen
     >>> cgen.constant_declare('myfloat', 3.14, dtype='float')
-    'static const float myfloat = 3.140000f; '
+    'static const float myfloat = 3.14f; '
     """
     v = constant(val, dtype=dtype)
     return f'static const {dtype} {name} = {v}; '

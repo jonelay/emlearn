@@ -1,5 +1,6 @@
 
 from . import trees
+from . import gbtrees
 from . import common
 from . import signal
 from . import tools

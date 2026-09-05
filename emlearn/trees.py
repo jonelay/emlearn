@@ -452,28 +452,31 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
         return 'avg += {}(features, features_length); '.format(name)
 
     forest_regressor_func = """float {function_name}(const {ctype} *features, int32_t features_length) {{
+        if (features_length != {n_features}) return NAN;
 
         float avg = 0;
 
         {tree_predictions}
-        
+
         return avg/{n_trees};
     }}
     """.format(**{
       'function_name': name+"_predict",
       'n_classes': n_classes,
       'n_trees': len(roots),
+      'n_features': n_features,
       'tree_predictions': '\n    '.join([ tree_vote_regressor(n) for n in tree_names ]),
       'ctype': ctype,
     })
 
     forest_predict_majority_func = """int32_t {function_name}(const {ctype} *features, int32_t features_length) {{
+        if (features_length != {n_features}) return -1;
 
         int32_t votes[{n_classes}] = {{0,}};
         int32_t _class = -1;
 
         {tree_predictions}
-    
+
         int32_t most_voted_class = -1;
         int32_t most_voted_votes = 0;
         for (int32_t i=0; i<{n_classes}; i++) {{
@@ -488,12 +491,14 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
     """.format(**{
       'function_name': name+"_predict",
       'n_classes': n_classes,
+      'n_features': n_features,
       'tree_predictions': '\n    '.join([ tree_vote_classifier(n) for n in tree_names ]),
       'ctype': ctype,
     })
 
 
     forest_proba_majority_func = """int {function_name}(const {ctype} *features, int32_t features_length, float *out, int out_length) {{
+        if (features_length != {n_features}) return -1;
 
         int32_t _class = -1;
 
@@ -502,7 +507,7 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
         }}
 
         {tree_predictions}
-    
+
         // compute mean
         for (int i=0; i<out_length; i++) {{
             out[i] = out[i] / {n_trees};
@@ -512,6 +517,7 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
     """.format(**{
       'function_name': name+"_predict_proba",
       'n_classes': n_classes,
+      'n_features': n_features,
       'tree_predictions': '\n    '.join([ tree_vote_proba(n) for n in tree_names ]),
       'n_trees': len(tree_names),
       'ctype': ctype,
@@ -527,6 +533,7 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
         """
         return c
     forest_proba_proportions_func = """int {function_name}(const {ctype} *features, int32_t features_length, float *out, int out_length) {{
+        if (features_length != {n_features}) return -1;
 
         int offset = 0;
 
@@ -535,7 +542,7 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
         }}
 
         {tree_predictions}
-    
+
         // compute mean
         for (int i=0; i<out_length; i++) {{
             out[i] = out[i] / {n_trees};
@@ -545,6 +552,7 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
     """.format(**{
       'function_name': name+"_predict_proba",
       'n_classes': n_classes,
+      'n_features': n_features,
       'tree_predictions': '\n    '.join([ tree_vote_leaf_proportion(i, n) for i, n in enumerate(tree_names) ]),
       'n_trees': len(tree_names),
       'ctype': ctype,
@@ -552,13 +560,14 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
 
 
     forest_predict_proportions_func = """int32_t {function_name}(const {ctype} *features, int32_t features_length) {{
+        if (features_length != {n_features}) return -1;
 
         float out[{n_classes}] = {{0.0f,}};
 
         int offset = 0;
 
         {tree_predictions}
-    
+
         // argmax over probabilities
         int32_t most_voted_class = -1;
         float most_voted_proba = 0.0f;
@@ -574,6 +583,7 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
     """.format(**{
       'function_name': name+"_predict",
       'n_classes': n_classes,
+      'n_features': n_features,
       'tree_predictions': '\n    '.join([ tree_vote_leaf_proportion(i, n) for i, n in enumerate(tree_names) ]),
       'ctype': ctype,
     })
@@ -724,10 +734,13 @@ class Wrapper:
         leaf = 'argmax'
         self.is_classifier = True
         self.out_dtype = "int"
+        self.classes_ = None
         if 'Regressor' in kind:
             leaf = 'value'
             self.is_classifier = False
             self.out_dtype = "float"
+        else:
+            self.classes_ = estimator.classes_
 
         if leaf_bits == 1:
             # treat as majority voting
@@ -791,7 +804,7 @@ class Wrapper:
             f"""
             {return_type}
             predict_wrapper(const float *values, int length) {{
-                // Convert to whatever is needed for inline
+                if (length != {n_features}) return -1;
                 {feature_dtype} features[{n_features}];
                 for (int i=0; i<length; i++) {{
                     features[i] = ({feature_dtype})values[i];
@@ -805,7 +818,7 @@ class Wrapper:
             f"""
             int
             predict_proba_wrapper(const float *values, int length, float *outputs, int n_outputs) {{
-                // Convert to whatever is needed for inline
+                if (length != {n_features}) return -1;
                 {feature_dtype} features[{n_features}];
                 for (int i=0; i<length; i++) {{
                     features[i] = ({feature_dtype})values[i];
@@ -823,7 +836,7 @@ class Wrapper:
             f"""
             {return_type}
             regress_wrapper(const float *values, int length) {{
-                // Convert to whatever is needed for inline
+                if (length != {n_features}) return NAN;
                 {feature_dtype} features[{n_features}];
                 for (int i=0; i<length; i++) {{
                     features[i] = ({feature_dtype})values[i];
@@ -858,22 +871,34 @@ class Wrapper:
         )
 
 
+    def _check_features(self, X):
+        import numpy
+        X = numpy.atleast_2d(X)
+        if X.shape[1] != self.n_features:
+            raise ValueError(
+                f"Expected {self.n_features} features, got {X.shape[1]}")
+        return X
+
     def predict(self, X):
+        X = self._check_features(X)
         self._build_classifier()
 
         if self.is_classifier:
             predictions = self.classifier_.predict(X)
+            if self.classes_ is not None:
+                predictions = self.classes_[predictions]
         else:
-            predictions = self.classifier_.regress(X)            
+            predictions = self.classifier_.regress(X)
 
         return predictions
 
     def predict_proba(self, X):
+        X = self._check_features(X)
         self._build_classifier()
 
         if not self.is_classifier:
             raise ValueError(f"Cannot call predict_proba on a Regressor")
-        
+
         probabilities = self.classifier_.predict_proba(X)
         return probabilities
 
@@ -947,5 +972,3 @@ class Wrapper:
                 f.write(code)
 
         return code
-
-
