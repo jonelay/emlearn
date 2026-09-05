@@ -347,25 +347,32 @@ def leaves_to_bytelist(leaves, leaf_bits):
         raise ValueError(f"Unsupported number for leaf_bits: {leaf_bits}")
     
 
-def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype='float', classifier=True, include_proba=True, weight_modifiers='static const'):
+def generate_c_inline_tree_functions(forest, tree_names, dtype,
+        leaf_dtype='int', return_type='int32_t', leaf_value=None):
+    """Render each flattened tree as an inline C function.
+
+    Shared between random forest and gradient boosting inline code
+    generation - the only difference is how a leaf is interpreted.
+
+    Args:
+        forest: Flattened forest tuple (nodes, roots, leaves).
+        tree_names: C function name for each tree.
+        dtype: Feature data type for threshold comparisons.
+        leaf_dtype: C constant type for leaf return values.
+        return_type: C return type of the tree functions.
+        leaf_value: Callback (leaf_idx, leaves) -> value the leaf returns,
+            formatted as a C constant of leaf_dtype. Defaults to the
+            stored leaf value.
+
+    Returns:
+        list of str: One C function definition per tree.
+    """
     nodes, roots, leaves = forest
-
-    cgen.assert_valid_identifier(name)
-
-    tree_names = [ name + '_tree_{}'.format(i) for i,_ in enumerate(roots) ]
-
-    ctype = dtype
-    leaf_dtype = 'int'
-    if not classifier:
-        leaf_dtype = 'float'
     indent = 2
 
-    leaves_dtype = 'uint8_t'
-    leaves_array = leaves_to_bytelist(leaves, leaf_bits=leaf_bits)
-    leaves_length = len(leaves_array)
-    leaves_name = name+'_leaves';
-    leaves_code = cgen.array_declare(leaves_name, leaves_length,
-            modifiers=weight_modifiers, dtype=leaves_dtype, values=leaves_array)
+    if leaf_value is None:
+        def leaf_value(leaf_idx, leaves):
+            return leaves[leaf_idx]
 
     def c_leaf(data, depth):
         value = cgen.constant(data, dtype=leaf_dtype)
@@ -386,31 +393,54 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
     def c_node(idx, depth):
         if idx < 0:
             leaf_idx = -idx-1
-            if not classifier:
-                # regression, put value directly into leaf
-                leaf_value = leaves[leaf_idx]
-            elif leaf_bits == 0:
-                # hard voting, put the class index directly into leaf
-                leaf_value = leaves[leaf_idx]
-            else:
-                # soft voting, offet into a leaves array
-                leaf_value = leaf_idx
-            return c_leaf(leaf_value, depth+1)
+            return c_leaf(leaf_value(leaf_idx, leaves), depth+1)
         else:
             return c_internal(nodes[idx], depth+1)
 
-
-
-    def tree_func(name, root, return_type='int32_t'):
+    def tree_func(name, root):
         return """static inline {return_type} {function_name}(const {ctype} *features, int32_t features_length) {{
         {code}
         }}
         """.format(**{
             'function_name': name,
             'code': c_node(root, 0),
-            'ctype': ctype,
-            'return_type': return_type 
+            'ctype': dtype,
+            'return_type': return_type,
         })
+
+    return [tree_func(n, r) for n, r in zip(tree_names, roots)]
+
+
+def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype='float', classifier=True, include_proba=True, weight_modifiers='static const'):
+    nodes, roots, leaves = forest
+
+    cgen.assert_valid_identifier(name)
+
+    tree_names = [ name + '_tree_{}'.format(i) for i,_ in enumerate(roots) ]
+
+    ctype = dtype
+    leaf_dtype = 'int'
+    if not classifier:
+        leaf_dtype = 'float'
+    indent = 2
+
+    leaves_dtype = 'uint8_t'
+    leaves_array = leaves_to_bytelist(leaves, leaf_bits=leaf_bits)
+    leaves_length = len(leaves_array)
+    leaves_name = name+'_leaves';
+    leaves_code = cgen.array_declare(leaves_name, leaves_length,
+            modifiers=weight_modifiers, dtype=leaves_dtype, values=leaves_array)
+
+    def leaf_value(leaf_idx, leaves):
+        if not classifier:
+            # regression, put value directly into leaf
+            return leaves[leaf_idx]
+        elif leaf_bits == 0:
+            # hard voting, put the class index directly into leaf
+            return leaves[leaf_idx]
+        else:
+            # soft voting, offset into a leaves array
+            return leaf_idx
 
     def tree_vote_classifier(name):
         return '_class = {}(features, features_length); votes[_class] += 1;'.format(name)
@@ -561,12 +591,14 @@ def generate_c_inlined(forest, name, n_features, n_classes=0, leaf_bits=0, dtype
         return_type = 'float'
         forest_funcs = [ forest_regressor_func ]
 
-    tree_funcs = [tree_func(n, r, return_type=return_type) for n,r in zip(tree_names, roots)]
+    tree_funcs = generate_c_inline_tree_functions(forest, tree_names, dtype,
+        leaf_dtype=leaf_dtype, return_type=return_type, leaf_value=leaf_value)
 
     head = """
     // !!! This file is generated using emlearn !!!
 
     #include <stdint.h>
+    #include <math.h>
     """
 
     parts  = [head] + tree_funcs

@@ -111,7 +111,7 @@ def build_classifier(cmodel, name, temp_dir,
     with open(code_file, 'w') as f:
         f.write(code)
     objects = cc.compile(sources=[code_file],
-        extra_preargs=cc_args, include_dirs=include_dirs)
+        extra_preargs=cc_args, include_dirs=include_dirs, output_dir=temp_dir)
 
     cc.link("executable", objects, output_filename=output_filename, 
         output_dir=temp_dir, libraries=libraries)  
