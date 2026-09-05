@@ -12,7 +12,13 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <string.h>
 #include <eml_common.h>
+
+#ifndef EML_TREES_LEAF_INDEX_TYPE
+#define EML_TREES_LEAF_INDEX_TYPE int32_t
+#endif
+typedef EML_TREES_LEAF_INDEX_TYPE eml_leaf_idx_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -70,7 +76,7 @@ Make the prediction for an individual decision tree
 
 Returns an offset into the leaves structure
 */
-static int32_t
+static eml_leaf_idx_t
 eml_trees_predict_tree(const EmlTrees *forest, int32_t tree_root,
                         const int16_t *features, int8_t features_length)
 {
@@ -96,7 +102,7 @@ eml_trees_predict_tree(const EmlTrees *forest, int32_t tree_root,
         }
     }
 
-    const int16_t leaf = -node_idx-1;
+    const eml_leaf_idx_t leaf = -node_idx-1;
 
     EML_LOG_BEGIN("eml-trees-predict-tree-end");
     EML_LOG_ADD_INTEGER("node", node_idx);
@@ -274,8 +280,8 @@ eml_trees_regress(const EmlTrees *forest,
     for (int32_t i=0; i<forest->n_trees; i++) {
         const int32_t leaf_number = eml_trees_predict_tree(forest, forest->tree_roots[i], features, features_length);        
         const int32_t leaf_offset = leaf_number * leaf_size;
-        const float *leaf_data = (float *)(forest->leaves + leaf_offset);
-        const float val = *leaf_data;
+        float val;
+        memcpy(&val, forest->leaves + leaf_offset, sizeof(float));
         sum += val;
     }
 
