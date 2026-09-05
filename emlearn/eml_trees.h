@@ -269,6 +269,10 @@ eml_trees_regress(const EmlTrees *forest,
         return EmlSizeMismatch;
     }
 
+    if (features_length != forest->n_features) {
+        return EmlSizeMismatch;
+    }
+
     if (forest->leaf_bits != 32) {
         // only majority vote supported for now
         return EmlUnsupported;
