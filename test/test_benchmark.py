@@ -30,7 +30,7 @@ def test_bench_melspec():
         libraries = ["m"] # math library / libm
 
     objects = cc.compile(sources=[code], include_dirs=include_dirs,
-     debug=1, extra_preargs=cc_args)
+     debug=1, extra_preargs=cc_args, output_dir=testdir)
     cc.link("executable", objects, output_filename=output_filename, 
         debug=1, libraries=libraries, output_dir=testdir)
     out = subprocess.check_output([prog]).decode('utf-8')

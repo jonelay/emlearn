@@ -45,6 +45,9 @@ eml_error_valid(EmlError e) {
 /**
 * \brief Get error description string
 */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
 static const char *
 eml_error_str(EmlError e) {
     if (eml_error_valid(e)) {

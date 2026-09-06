@@ -16,3 +16,5 @@ myst_parser>=4.0.0
 seaborn>=0.11.2
 breathe>=4.35
 numpy<2.1.0
+pytest-xdist>=3.0.0
+filelock>=3.0.0

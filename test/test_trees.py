@@ -20,10 +20,10 @@ import emlearn
 from emlearn.evaluate.trees import model_size_nodes, tree_depth_average
 import pytest
 
+from conftest import RANDOM_SEED, ALLOWED_INCORRECT_INT16, CLASSIFICATION_DATASETS
+
 here = os.path.dirname(__file__)
 
-RANDOM_SEED = 42
-ALLOWED_INCORRECT_INT16 = 0.20
 
 CLASSIFICATION_MODELS = {
     'RFC': RandomForestClassifier(n_estimators=10, random_state=RANDOM_SEED),
@@ -42,11 +42,6 @@ REGRESSION_MODELS = {
     'RFR': RandomForestRegressor(n_estimators=10, random_state=RANDOM_SEED),
     'ERR': ExtraTreesRegressor(n_estimators=10, random_state=RANDOM_SEED),
     'DTR': DecisionTreeRegressor(random_state=RANDOM_SEED),
-}
-
-CLASSIFICATION_DATASETS = {
-    'binary': datasets.make_classification(n_classes=2, n_samples=100, random_state=RANDOM_SEED),
-    '5way': datasets.make_classification(n_classes=5, n_informative=5, n_samples=100, random_state=RANDOM_SEED),
 }
 
 REGRESSION_DATASETS = {
