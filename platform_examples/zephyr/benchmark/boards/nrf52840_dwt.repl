@@ -1,0 +1,71 @@
+// nRF52832/nRF52840 platform with DWT cycle counter for emlearn benchmarks
+//
+// Standalone platform definition for Renode emulation of nRF52 targets.
+// Includes DWT peripheral for cycle-accurate timing measurements.
+//
+// Usage in Renode script:
+//   emulation SetGlobalQuantum "00:00:00.000000016"  // 16ns = 1 cycle at 64MHz
+//   machine LoadPlatformDescription @path/to/nrf52840_dwt.repl
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu@0
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic: nvic
+
+// DWT cycle counter for timing measurements (64 MHz)
+dwt: Miscellaneous.DWT @ sysbus 0xE0001000
+    frequency: 64000000
+
+uart0: UART.NRF52840_UART @ sysbus 0x40002000
+    easyDMA: true
+    -> nvic@2
+
+rtc0: Timers.NRF52840_RTC @ sysbus 0x4000B000
+    numberOfEvents: 3
+    -> nvic@11
+
+rtc1: Timers.NRF52840_RTC @ sysbus 0x40011000
+    numberOfEvents: 3
+    -> nvic@17
+
+timer0: Timers.NRF52840_Timer @ sysbus 0x40008000
+    numberOfEvents: 4
+    -> nvic@8
+
+timer1: Timers.NRF52840_Timer @ sysbus 0x40009000
+    numberOfEvents: 4
+    -> nvic@9
+
+timer2: Timers.NRF52840_Timer @ sysbus 0x4000A000
+    numberOfEvents: 4
+    -> nvic@10
+
+clock: Miscellaneous.NRF_CLOCK @ sysbus 0x40000000
+    -> nvic@0
+
+gpio0: GPIOPort.NRF52840_GPIO @ sysbus 0x50000500
+
+gpiote: GPIOPort.NRF52840_GPIOTasksEvents @ sysbus 0x40006000
+    port0: gpio0
+    -> nvic@6
+
+ppi: Miscellaneous.NRF52840_PPI @ sysbus 0x4001F000
+
+rng: Miscellaneous.NRF52840_RNG @ sysbus 0x4000D000
+    -> nvic@13
+
+// Memory: 512KB Flash, 64KB RAM (nRF52832 specs, nRF52840 has more)
+flash: Memory.MappedMemory @ sysbus 0x0
+    size: 0x80000
+
+ram: Memory.MappedMemory @ { sysbus 0x800000; sysbus 0x20000000 }
+    size: 0x10000
+
+sysbus:
+    init:
+        Tag <0x10000000, 0x10000FFF> "FICR"
+        Tag <0x100000a0, 0x100000a3> "DEVICEADDRTYPE" 0x1
+        Tag <0x100000a4, 0x100000a7> "DEVICEADDR[0]" 0xAABBCCDD
+        Tag <0x10001200, 0x10001203> "PSELRESET"

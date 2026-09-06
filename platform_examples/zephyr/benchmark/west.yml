@@ -1,0 +1,20 @@
+# Copyright (c) 2024 emlearn
+# SPDX-License-Identifier: MIT
+
+manifest:
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+
+  projects:
+    - name: zephyr
+      remote: zephyrproject-rtos
+      revision: v4.2.1
+      import:
+        name-allowlist:
+          - cmsis_6      # required by ARM port
+          - hal_nordic   # required by Nordic boards
+
+    - name: emlearn
+      url: https://github.com/emlearn/emlearn
+      revision: master

@@ -21,8 +21,31 @@ Example:
 """
 
 import os
+import shutil
+import subprocess
+import sys
 import pytest
 from pathlib import Path
+
+
+@pytest.fixture(scope='session')
+def benchmark_app_path(benchmark_app_path, tmp_path_factory):
+    """Copy of the benchmark app with a generated model header.
+
+    The app expects src/benchmark_model.h and src/benchmark_model_testdata.h,
+    which are produced by src/train_model.py. Generate them into a temporary
+    copy so the source tree is never modified.
+    """
+    app_copy = tmp_path_factory.mktemp('benchmark_app') / 'benchmark'
+    shutil.copytree(benchmark_app_path, app_copy)
+    subprocess.run(
+        [sys.executable, 'train_model.py'],
+        cwd=app_copy / 'src',
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return app_copy
 
 
 # =============================================================================

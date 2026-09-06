@@ -16,3 +16,8 @@ tmp/
 examples/xor_model.h
 examples/classifiers
 .vs
+
+# Benchmark run outputs (regenerate with examples/mcu_benchmark/run_all.py)
+examples/mcu_benchmark/runs/
+# Dataset cache downloaded by examples/mcu_benchmark/datasets.py
+/data/

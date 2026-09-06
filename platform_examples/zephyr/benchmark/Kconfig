@@ -1,0 +1,139 @@
+# emlearn benchmark Kconfig options
+
+mainmenu "emlearn Benchmark"
+
+source "Kconfig.zephyr"
+
+menuconfig EMLEARN_BENCHMARK
+	bool "emlearn benchmark options"
+	default y
+	help
+	  Configuration options for emlearn benchmarking.
+
+if EMLEARN_BENCHMARK
+
+choice EMLEARN_TIMING_SOURCE
+	prompt "Timing source"
+	default EMLEARN_TIMING_DWT if CPU_CORTEX_M3 || CPU_CORTEX_M4 || CPU_CORTEX_M7 || CPU_CORTEX_M33
+	default EMLEARN_TIMING_SYSTICK
+	help
+	  Select the timing source for benchmark measurements.
+
+config EMLEARN_TIMING_DWT
+	bool "DWT cycle counter (Cortex-M3+)"
+	depends on CPU_CORTEX_M3 || CPU_CORTEX_M4 || CPU_CORTEX_M7 || CPU_CORTEX_M33
+	help
+	  Use the DWT (Data Watchpoint and Trace) cycle counter for
+	  cycle-accurate timing. Available on Cortex-M3, M4, M7, M33.
+	  Provides the most accurate timing measurements.
+
+config EMLEARN_DWT_CPU_FREQ_HZ
+	int "DWT CPU frequency in Hz"
+	default 64000000
+	depends on EMLEARN_TIMING_DWT
+	help
+	  CPU frequency for DWT cycle counter timing calculations.
+	  DWT counts CPU cycles, not system clock ticks. On many platforms,
+	  CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC reflects a low-frequency RTC
+	  or timer, not the actual CPU frequency.
+
+	  Common values:
+	  - nRF52832/nRF52840: 64000000 (64 MHz)
+	  - STM32F4: 84000000-168000000 (varies by model)
+	  - STM32F7: 216000000 (216 MHz)
+
+config EMLEARN_TIMING_SYSTICK
+	bool "Systick timer"
+	help
+	  Use the Zephyr kernel systick timer for timing measurements.
+	  Resolution depends on CONFIG_SYS_CLOCK_TICKS_PER_SEC.
+	  Works on all platforms including Cortex-M0/M0+.
+
+config EMLEARN_TIMING_POSIX
+	bool "POSIX clock_gettime (native_sim)"
+	depends on ARCH_POSIX
+	help
+	  Use POSIX clock_gettime(CLOCK_MONOTONIC) for high-resolution
+	  timing on native_sim and other POSIX-based targets.
+	  Provides nanosecond precision using host system clock.
+
+endchoice
+
+config EMLEARN_BENCHMARK_ITERATIONS
+	int "Number of benchmark iterations"
+	default 100
+	range 10 10000
+	help
+	  Number of inference iterations to run for timing measurements.
+
+config EMLEARN_BENCHMARK_WARMUP
+	int "Number of warmup iterations"
+	default 10
+	range 0 100
+	help
+	  Number of warmup iterations to run before timing.
+	  Helps stabilize cache and branch predictor state.
+
+config EMLEARN_BENCHMARK_STRUCTURED_OUTPUT
+	bool "Enable structured output markers"
+	default y
+	help
+	  Output results with machine-readable markers (BENCHMARK:, RESULT:)
+	  for automated parsing by test infrastructure.
+
+config EMLEARN_BENCHMARK_MICRO
+	bool "Run micro-benchmarks for timing validation"
+	default n
+	help
+	  Run isolated micro-benchmarks before the main model benchmark.
+	  Measures individual operations (expf, sigmoid, integer ops, FP ops,
+	  FP division) to validate timing assumptions and CPI baselines.
+
+	  Output format:
+	    RESULT:MICRO:<name> avg_cycles=<cyc> iterations=<n>
+
+	  Available benchmarks:
+	    - EXPF: Isolated expf() cost (~50-200 cycles)
+	    - SIGMOID: Full sigmoid 1/(1+exp(-x)) cost (~60-250 cycles)
+	    - INT_OPS: Integer add/xor/and ops (~1 CPI baseline)
+	    - FP_OPS: FP add/mul ops (~1 CPI on FPU)
+	    - FP_DIV: FP division (~14 cycles on Cortex-M4F)
+
+	  Useful for:
+	    - Validating GBT sigmoid overhead hypothesis
+	    - Establishing CPI baselines for different instruction types
+	    - Cross-validating DWT timing with instruction counts
+
+config EMLEARN_USE_CMSIS_DSP
+	bool "Use CMSIS-DSP optimized functions"
+	default n
+	depends on CPU_CORTEX_M
+	select CMSIS_DSP
+	help
+	  Enable CMSIS-DSP optimized implementations for tree voting
+	  accumulation and normalization. Provides ~2.3x speedup for
+	  soft voting with n_classes >= 3.
+
+	  Requires CMSIS-DSP module (automatically selected).
+
+config EMLEARN_BENCHMARK_PREDICT_PROBA
+	bool "Benchmark predict_proba instead of predict"
+	default n
+	help
+	  Measure probability prediction latency instead of class prediction.
+	  For binary GBT, this exercises sigmoid computation.
+	  For multi-class GBT, this exercises softmax computation.
+
+	  Useful for measuring the overhead of probability output vs class labels.
+
+config EMLEARN_POINTER_TRAVERSAL
+	bool "Use pointer-based tree traversal"
+	default n
+	help
+	  Use pointer-based tree traversal instead of index-based.
+	  May improve performance on some architectures by reducing
+	  memory access latency. Target 5-15% improvement on Cortex-M4F.
+
+	  Default is index-based traversal which uses array indexing.
+
+endif # EMLEARN_BENCHMARK

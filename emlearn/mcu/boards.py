@@ -84,7 +84,7 @@ BOARDS: Dict[str, BoardConfig] = {
         is_emulator=True,
     ),
     'renode_nrf52840': BoardConfig(
-        name='nrf52dk/nrf52832',  # Zephyr 4.x format: board/soc
+        name='nrf52840dk/nrf52840',  # Zephyr 4.x format: board/soc; matches the emulated SoC
         device=None,
         cpu_freq_hz=64_000_000,
         has_dwt=True,
@@ -93,6 +93,7 @@ BOARDS: Dict[str, BoardConfig] = {
         flash_method=FlashMethod.RENODE,
         is_emulator=True,
         renode_platform='nrf52840',
+        renode_repl='platform_examples/zephyr/benchmark/boards/nrf52840_dwt.repl',
         conf_file='boards/renode_nrf52840.conf',
     ),
 

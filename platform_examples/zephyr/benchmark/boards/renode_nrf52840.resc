@@ -1,0 +1,24 @@
+// emlearn benchmark Renode script for nRF52832/nRF52840
+//
+// Usage:
+//   renode --disable-xwt -e "include @boards/renode_nrf52840.resc"
+//
+// Or with custom ELF path:
+//   renode --disable-xwt -e "\$elf=@/path/to/zephyr.elf; include @boards/renode_nrf52840.resc"
+
+// Set quantum to 16ns (1 CPU cycle at 64 MHz) for cycle-accurate DWT timing
+emulation SetGlobalQuantum "00:00:00.000000016"
+
+using sysbus
+mach add "benchmark"
+mach set "benchmark"
+
+// Load platform with DWT cycle counter
+machine LoadPlatformDescription @boards/nrf52840_dwt.repl
+
+// Default ELF path (can be overridden with $elf variable)
+$elf?=@zephyr/zephyr.elf
+sysbus LoadELF $elf
+
+// Start emulation
+start
