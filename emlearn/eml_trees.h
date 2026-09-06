@@ -2,6 +2,13 @@
 #ifndef EML_TREES_H
 #define EML_TREES_H
 
+// Pointer-based tree traversal option
+// May improve performance on some architectures by avoiding index arithmetic
+// Requires benchmarking on target platform to verify improvement
+#ifndef EML_TREES_USE_POINTER_TRAVERSAL
+#define EML_TREES_USE_POINTER_TRAVERSAL 0
+#endif
+
 #ifndef EML_TREES_TRACE
 #define EML_TREES_TRACE 0
 #endif
@@ -12,7 +19,24 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <string.h>
 #include <eml_common.h>
+
+#ifndef EML_TREES_CMSIS_DSP
+#define EML_TREES_CMSIS_DSP 0
+#endif
+
+#if EML_TREES_CMSIS_DSP
+#include "arm_math.h"
+#endif
+
+// Leaf index type configuration
+// Use int16_t for forests with <32K leaves (saves memory on 8/16-bit MCUs)
+// Default to int32_t for compatibility with larger forests
+#ifndef EML_TREES_LEAF_INDEX_TYPE
+#define EML_TREES_LEAF_INDEX_TYPE int32_t
+#endif
+typedef EML_TREES_LEAF_INDEX_TYPE eml_leaf_idx_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -70,22 +94,46 @@ Make the prediction for an individual decision tree
 
 Returns an offset into the leaves structure
 */
-static int32_t
+static eml_leaf_idx_t
 eml_trees_predict_tree(const EmlTrees *forest, int32_t tree_root,
                         const int16_t *features, int8_t features_length)
 {
+#if EML_TREES_USE_POINTER_TRAVERSAL
+    // Pointer-based traversal: may improve performance on some architectures
+    const EmlTreesNode *node = &forest->nodes[tree_root];
+    while (1) {
+        const int8_t feature = node->feature;
+        const int16_t value = features[feature];
+        const int16_t point = node->value;
+        const int16_t child_offset = (value < point) ? node->left : node->right;
+
+#if EML_TREES_TRACE
+        EML_LOG_PRINTF("predict-tree-iter feature=%d value=%d th=%d next=%d \n",
+            feature, value, point, child_offset);
+#endif
+
+        if (child_offset < 0) {
+            // Reached a leaf
+            const eml_leaf_idx_t leaf = (eml_leaf_idx_t)(-child_offset - 1);
+            EML_LOG_BEGIN("eml-trees-predict-tree-end");
+            EML_LOG_ADD_INTEGER("leaf", leaf);
+            EML_LOG_END();
+            return leaf;
+        }
+        node = node + child_offset;
+    }
+#else
+    // Index-based traversal (default)
     int32_t node_idx = tree_root;
 
-    // TODO: see if using a pointer node instead of indirect adressing using node_idx improves perf
     while (node_idx >= 0) {
         const int8_t feature = forest->nodes[node_idx].feature;
         const int16_t value = features[feature];
         const int16_t point = forest->nodes[node_idx].value;
-        //printf("node %d feature %d. %d < %d\n", node_idx, feature, value, point);
         const int16_t child = (value < point) ? forest->nodes[node_idx].left : forest->nodes[node_idx].right;
-    
+
 #if EML_TREES_TRACE
-        EML_LOG_PRINTF("predit-tree-iter node=%d feature=%d value=%d th=%d next=%d \n",
+        EML_LOG_PRINTF("predict-tree-iter node=%d feature=%d value=%d th=%d next=%d \n",
             node_idx, feature, value, point, child);
 #endif
 
@@ -96,7 +144,7 @@ eml_trees_predict_tree(const EmlTrees *forest, int32_t tree_root,
         }
     }
 
-    const int16_t leaf = -node_idx-1;
+    const eml_leaf_idx_t leaf = (eml_leaf_idx_t)(-node_idx-1);
 
     EML_LOG_BEGIN("eml-trees-predict-tree-end");
     EML_LOG_ADD_INTEGER("node", node_idx);
@@ -104,6 +152,7 @@ eml_trees_predict_tree(const EmlTrees *forest, int32_t tree_root,
     EML_LOG_END();
 
     return leaf;
+#endif
 }
 
 
@@ -143,10 +192,26 @@ eml_trees_predict_proba(const EmlTrees *self,
 
 
     } else if (leaf_bits_per_class == 8) {
-        // soft voting. Tree leaf is a index into leaves table, containing class proportions 
+        // soft voting. Tree leaf is a index into leaves table, containing class proportions
 
         const int leaf_size = 1*self->n_classes;
 
+#if EML_TREES_CMSIS_DSP
+        EML_PRECONDITION(self->n_classes <= EMTREES_MAX_CLASSES, EmlSizeMismatch);
+        const float inv_255 = 1.0f / 255.0f;
+        float temp[EMTREES_MAX_CLASSES];
+        for (int32_t i=0; i<self->n_trees; i++) {
+            const int32_t leaf_number = eml_trees_predict_tree(self, self->tree_roots[i], features, features_length);
+            const int32_t leaf_offset = leaf_number * leaf_size;
+            const uint8_t *leaf_data = self->leaves + leaf_offset;
+
+            for (int class_no=0; class_no<self->n_classes; class_no++) {
+                temp[class_no] = leaf_data[class_no] * inv_255;
+            }
+
+            arm_add_f32(out, temp, out, self->n_classes);
+        }
+#else
         for (int32_t i=0; i<self->n_trees; i++) {
 
             const int32_t leaf_number = eml_trees_predict_tree(self, self->tree_roots[i], features, features_length);
@@ -158,23 +223,22 @@ eml_trees_predict_proba(const EmlTrees *self,
                 out[class_no] += class_proportion;
             }
 
-#if 0
-            fprintf(stderr,
-                " predict-proba-tree tree=%d leaf=%d offset=%d \n",
-                i, leaf_number, leaf_offset
-            );
-#endif
-
         }
+#endif
 
     } else {
         return EmlUnsupported;
     }
 
     // compute mean
+#if EML_TREES_CMSIS_DSP
+    const float inv_n_trees = 1.0f / self->n_trees;
+    arm_scale_f32(out, inv_n_trees, out, out_length);
+#else
     for (int i=0; i<out_length; i++) {
         out[i] = out[i] / self->n_trees;
     }
+#endif
 
     return EmlOk;
 }
@@ -272,10 +336,10 @@ eml_trees_regress(const EmlTrees *forest,
 
     float sum = 0;
     for (int32_t i=0; i<forest->n_trees; i++) {
-        const int32_t leaf_number = eml_trees_predict_tree(forest, forest->tree_roots[i], features, features_length);        
+        const int32_t leaf_number = eml_trees_predict_tree(forest, forest->tree_roots[i], features, features_length);
         const int32_t leaf_offset = leaf_number * leaf_size;
-        const float *leaf_data = (float *)(forest->leaves + leaf_offset);
-        const float val = *leaf_data;
+        float val;
+        memcpy(&val, forest->leaves + leaf_offset, sizeof(float));
         sum += val;
     }
 
