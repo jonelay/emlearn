@@ -6,6 +6,12 @@
 *.dll
 *.egg-info/
 melfilter*.png
+# Figures rendered by the example scripts. Sphinx Gallery regenerates them
+# into docs/auto_examples during the documentation build.
+examples/example-*.png
+# Timing results are measured on every run, since they only need a host
+# compiler. The size results are a cached fallback and are tracked.
+examples/tree_ensemble_perf_benchmark.csv
 *.o
 test/bench
 .pytest_cache/
