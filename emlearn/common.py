@@ -21,6 +21,7 @@ default_warn_flags = [
     '-Wno-unused-parameter',
     '-Wno-unused-variable',
     '-Wno-unused-function',
+    '-Wno-unused-const-variable',
 ]
 
 def check_array(arr):
@@ -111,7 +112,7 @@ def build_classifier(cmodel, name, temp_dir,
     with open(code_file, 'w') as f:
         f.write(code)
     objects = cc.compile(sources=[code_file],
-        extra_preargs=cc_args, include_dirs=include_dirs)
+        extra_preargs=cc_args, include_dirs=include_dirs, output_dir=temp_dir)
 
     cc.link("executable", objects, output_filename=output_filename, 
         output_dir=temp_dir, libraries=libraries)  
@@ -158,7 +159,7 @@ def run_classifier(bin_path, data, out_dtype='int', float_precision=8):
     return outputs
 
 class CompiledClassifier():
-    def __init__(self, cmodel, name, call=None, include_dir=None, temp_dir='tmp',
+    def __init__(self, cmodel, name, call=None, include_dir=None, temp_dir=None,
             test_function=None,
             out_dtype='int',
             proba_call=None,
@@ -166,6 +167,15 @@ class CompiledClassifier():
 
         if include_dir == None:
             include_dir = get_include_dir()
+
+        # Use unique temp_dir per instance for thread safety
+        self._managed_temp_dir = False
+        if temp_dir is None:
+            from . import temp_manager
+            temp_dir = str(temp_manager.create_compile_dir(name))
+            self._managed_temp_dir = True
+
+        self._temp_dir = temp_dir
         self.bin_path = build_classifier(cmodel, name,
                 include_dir=include_dir, temp_dir=temp_dir, func=call, test_function=test_function)
 
@@ -209,6 +219,15 @@ class CompiledClassifier():
 
         return self.predict(X)
 
+    def __del__(self):
+        """Clean up temp directory when object is destroyed."""
+        if getattr(self, '_managed_temp_dir', False) and getattr(self, '_temp_dir', None):
+            try:
+                from . import temp_manager
+                from pathlib import Path
+                temp_manager.cleanup_subdir(Path(self._temp_dir))
+            except Exception:
+                pass  # Best effort cleanup
 
 
 def compile_executable(code_file : str,

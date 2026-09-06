@@ -20,38 +20,32 @@ import emlearn
 from emlearn.evaluate.trees import model_size_nodes, tree_depth_average
 import pytest
 
-here = os.path.dirname(__file__)
+from conftest import RANDOM_SEED, ALLOWED_INCORRECT_INT16, CLASSIFICATION_DATASETS
 
-random = numpy.random.randint(0, 1000)
-print('random_state={}'.format(random))
+here = os.path.dirname(__file__)
 
 
 CLASSIFICATION_MODELS = {
-    'RFC': RandomForestClassifier(n_estimators=10, random_state=random),
-    'ETC': ExtraTreesClassifier(n_estimators=10, random_state=random),
-    'DTC': DecisionTreeClassifier(random_state=random),
+    'RFC': RandomForestClassifier(n_estimators=10, random_state=RANDOM_SEED),
+    'ETC': ExtraTreesClassifier(n_estimators=10, random_state=RANDOM_SEED),
+    'DTC': DecisionTreeClassifier(random_state=RANDOM_SEED),
 }
 
 # these will cause incomplete leaf nodes. Needs class proportion support
 CLASSIFICATION_MODELS_DEPTH_LIMIT = {
-    'RFC-max_depth': RandomForestClassifier(n_estimators=10, random_state=random, max_depth=3),
-    'ETC-min_samples_leaf': RandomForestClassifier(n_estimators=10, random_state=random, min_samples_leaf=0.20),
+    'RFC-max_depth': RandomForestClassifier(n_estimators=10, random_state=RANDOM_SEED, max_depth=3),
+    'ETC-min_samples_leaf': RandomForestClassifier(n_estimators=10, random_state=RANDOM_SEED, min_samples_leaf=0.20),
 }
 
 
 REGRESSION_MODELS = {
-    'RFR': RandomForestRegressor(n_estimators=10, random_state=random),
-    'ERR': ExtraTreesRegressor(n_estimators=10, random_state=random),
-    'DTR': DecisionTreeRegressor(random_state=random),
-}
-
-CLASSIFICATION_DATASETS = {
-    'binary': datasets.make_classification(n_classes=2, n_samples=100, random_state=random),
-    '5way': datasets.make_classification(n_classes=5, n_informative=5, n_samples=100, random_state=random),
+    'RFR': RandomForestRegressor(n_estimators=10, random_state=RANDOM_SEED),
+    'ERR': ExtraTreesRegressor(n_estimators=10, random_state=RANDOM_SEED),
+    'DTR': DecisionTreeRegressor(random_state=RANDOM_SEED),
 }
 
 REGRESSION_DATASETS = {
-    '1out': datasets.make_regression(n_targets=1, n_samples=100, random_state=random),
+    '1out': datasets.make_regression(n_targets=1, n_samples=100, random_state=RANDOM_SEED),
 }
 
 METHODS = ['loadable', 'inline']

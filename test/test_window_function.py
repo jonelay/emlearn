@@ -1,6 +1,7 @@
 
 import os.path
 import subprocess
+import sys
 import json
 
 import numpy
@@ -10,7 +11,7 @@ here = os.path.dirname(__file__)
 
 def run_window_function(options):
     module = 'emlearn.tools.window_function'
-    args = ['python3', '-m', module]
+    args = [sys.executable, '-m', module]
 
     for key, value in options.items():
         args.append('--{}={}'.format(key, value))

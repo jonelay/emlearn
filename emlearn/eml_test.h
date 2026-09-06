@@ -13,10 +13,10 @@ extern "C" {
 #endif
 
 #ifndef EML_CSV_BUFFER_LENGTH
-#define EML_CSV_BUFFER_LENGTH 2*1024
+#define EML_CSV_BUFFER_LENGTH (16*1024)
 #endif
 #ifndef EML_CSV_VALUES_LENGTH
-#define EML_CSV_VALUES_LENGTH 256
+#define EML_CSV_VALUES_LENGTH (1024)
 #endif
 
 typedef void (*EmlCsvCallback)(const float *values, int length, int row);
