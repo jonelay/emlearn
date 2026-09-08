@@ -313,6 +313,10 @@ def generate_c_nodes(flat, name, dtype='float', modifiers='static const'):
 
         left = encode_child(index, left_child)
         right = encode_child(index, right_child)
+        # C engine uses strict less-than; sklearn uses <=
+        # For integers: x <= th  ⟺  x < floor(th) + 1
+        if 'int' in dtype and feature != -1:
+            value = math.floor(value) + 1
         value = cgen.constant(value, dtype=dtype)
 
         return "{{ {}, {}, {}, {} }}".format(feature, value, left, right)

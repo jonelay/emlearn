@@ -395,3 +395,25 @@ def test_trees_loadable_unsupported_dtype(dtype):
         cmodel = emlearn.convert(estimator, method='loadable', dtype=dtype)
 
 
+LOADABLE_INT16_MODELS = {
+    'rf': RandomForestClassifier(n_estimators=5, max_depth=4, random_state=0),
+    'dt': DecisionTreeClassifier(max_depth=4, random_state=0),
+}
+@pytest.mark.parametrize("model_name", LOADABLE_INT16_MODELS.keys())
+def test_trees_loadable_int16_threshold_boundaries(model_name):
+    """Loadable int16 thresholds must match sklearn predictions exactly.
+
+    Regression test for off-by-one when converting <= thresholds to < with integer types.
+    """
+    rng = numpy.random.RandomState(0)
+    X = rng.randint(-50, 50, size=(400, 4)).astype(numpy.int16)
+    y = (X[:, 0] > 10).astype(int)
+
+    estimator = LOADABLE_INT16_MODELS[model_name]
+    estimator.fit(X.astype(float), y)
+
+    cmodel = emlearn.convert(estimator, method='loadable', dtype='int16_t')
+
+    pred_sklearn = estimator.predict(X.astype(float))
+    pred_c = cmodel.predict(X.astype(float))
+    numpy.testing.assert_array_equal(pred_c, pred_sklearn)
