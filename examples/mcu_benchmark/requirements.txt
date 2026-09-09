@@ -9,6 +9,8 @@ pandas>=1.3.0
 
 # Figures
 plotly>=5.0.0
+matplotlib>=3.5.0
+seaborn>=0.12.0
 
 # MCU benchmarks (Renode/hardware)
 west>=1.0.0
