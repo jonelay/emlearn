@@ -234,6 +234,9 @@ Host CFFI times include Python/CFFI overhead and don't reflect native C performa
 ## Quick Start
 
 ```bash
+# See GBT vs RF in action (offline, ~30s)
+.venv/bin/python examples/mcu_benchmark/run_all.py --benchmark sample_efficiency --quick --host-only
+
 # Quick validation (host only, reduced configs)
 .venv/bin/python examples/mcu_benchmark/run_all.py --benchmark latency --quick --host-only
 
@@ -273,6 +276,15 @@ source .env.local
 
 
 ## Prerequisites
+
+### Network Requirements
+
+| Mode | Datasets | Network |
+|------|----------|---------|
+| `--quick` | embedded_synth, digits, additive_synth | Not required |
+| Full | + sonar, wine, iris, breast_cancer, california, diabetes | sonar + california downloaded on first run |
+
+`--quick --host-only` is fully offline-safe: all datasets are synthetic or bundled with scikit-learn.
 
 ### Host Benchmarks
 - Python 3.9+ with venv set up as above

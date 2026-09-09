@@ -24,7 +24,7 @@ from ..common import RunContext, create_benchmark_result, measure_host_latency
 from ..checkpointing import config_hash
 from ..mcu_runner import measure_mcu_timing, is_emulator_platform
 from ..process_manager import run_parallel
-from ..datasets import get_regression_datasets
+from ..datasets import get_regression_datasets, get_quick_datasets
 from ..model_configs import get_sweep_configs
 
 # Default random state
@@ -168,7 +168,10 @@ def run_regression_benchmark(
 
     all_results = []
 
-    reg_datasets = get_regression_datasets()
+    if quick:
+        reg_datasets = get_quick_datasets(task='regression')
+    else:
+        reg_datasets = get_regression_datasets()
 
     if datasets:
         reg_datasets = {k: v for k, v in reg_datasets.items() if k in datasets}

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 
 import pandas as pd
@@ -88,6 +89,7 @@ def run_all_benchmarks(
     if methods is None:
         methods = ['inline']
     results = {}
+    errors = []
 
     for benchmark in benchmarks:
         if benchmark not in BENCHMARK_FUNCTIONS:
@@ -118,9 +120,11 @@ def run_all_benchmarks(
             results[benchmark] = df
         except Exception as e:
             print(f"Error running {benchmark}: {e}")
+            traceback.print_exc()
             results[benchmark] = pd.DataFrame()
+            errors.append(benchmark)
 
-    return results
+    return results, errors
 
 
 def main():
@@ -308,7 +312,7 @@ Examples:
         print(f"\nFull mode config count: {counts['total']} per platform")
 
     # Run benchmarks
-    results = run_all_benchmarks(
+    results, errors = run_all_benchmarks(
         benchmarks=benchmarks,
         platforms=platforms,
         task=args.task,
@@ -336,13 +340,18 @@ Examples:
     for benchmark, df in results.items():
         if len(df) > 0:
             print(f"\n{benchmark}: {len(df)} results")
+        elif benchmark in errors:
+            print(f"\n{benchmark}: FAILED")
         else:
             print(f"\n{benchmark}: No results")
+
+    if errors:
+        print(f"\n{len(errors)} benchmark(s) failed: {', '.join(errors)}")
 
     if run_ctx is not None:
         print(f"\nResults saved to: {run_ctx.run_dir}")
 
-    return 0
+    return 1 if errors else 0
 
 
 if __name__ == '__main__':

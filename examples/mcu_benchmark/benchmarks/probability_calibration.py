@@ -23,7 +23,7 @@ from ..common import RunContext, create_benchmark_result, measure_host_latency
 from ..checkpointing import config_hash
 from ..mcu_runner import measure_mcu_timing, is_emulator_platform
 from ..process_manager import run_parallel
-from ..datasets import get_classification_datasets
+from ..datasets import get_classification_datasets, get_quick_datasets
 from ..model_configs import get_sweep_configs
 from ..metrics import expected_calibration_error
 
@@ -174,7 +174,10 @@ def run_calibration_benchmark(
 
     all_results = []
 
-    class_datasets = get_classification_datasets()
+    if quick:
+        class_datasets = get_quick_datasets(task='classification')
+    else:
+        class_datasets = get_classification_datasets()
 
     if datasets:
         class_datasets = {k: v for k, v in class_datasets.items() if k in datasets}
